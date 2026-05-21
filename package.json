@@ -1,0 +1,35 @@
+{
+    "name": "survey-creator-collaboration",
+    "private": true,
+    "version": "0.1.0",
+    "description": "Collaborative editing service for SurveyJS Creator",
+    "workspaces": [
+        "packages/server",
+        "packages/client"
+    ],
+    "scripts": {
+        "dev": "npm -w @collab/server run dev",
+        "build": "npm -w @collab/server run build && npm -w @collab/client run build",
+        "start": "npm run build && npm -w @collab/server run start"
+    },
+    "dependencies": {
+        "react": "^17.0.2",
+        "react-dom": "^17.0.2",
+        "survey-core": "../survey-library/packages/survey-core/build",
+        "survey-creator-core": "../survey-creator/packages/survey-creator-core/build",
+        "survey-creator-react": "../survey-creator/packages/survey-creator-react/build",
+        "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.5.0",
+        "@types/react": "^17.0.83",
+        "@types/react-dom": "^17.0.25",
+        "@types/ws": "^8.5.12",
+        "@vitejs/plugin-react": "^4.3.1",
+        "concurrently": "^9.0.1",
+        "cross-env": "^7.0.3",
+        "tsx": "^4.19.0",
+        "typescript": "^5.5.4",
+        "vite": "^5.4.2"
+    }
+}
