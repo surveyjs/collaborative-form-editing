@@ -19,7 +19,7 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
     const creator = useMemo(() => {
         return new SurveyCreator({
             showLogicTab: true,
-            showTranslationTab: false,
+            showTranslationTab: true,
             showJSONEditorTab: true
         });
     }, [props.sessionId]);

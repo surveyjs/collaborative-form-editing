@@ -20,12 +20,19 @@ function makeSession(id: string, surveyModel: SurveyModel): ISession {
     return { id, surveyModel, undoRedoManager, clientCount: 0 };
 }
 
-export function createSession(initialSchema?: any): ISession {
-    const id = randomUUID();
+export function createSession(initialSchema?: any, id?: string): ISession {
+    const sessionId = id ?? randomUUID();
     const surveyModel = new SurveyModel(initialSchema ?? {});
-    const session = makeSession(id, surveyModel);
-    sessions.set(id, session);
+    const session = makeSession(sessionId, surveyModel);
+    sessions.set(sessionId, session);
     return session;
+}
+
+/** Return an existing session by id, or create an empty one if none exists. */
+export function getOrCreateSession(id: string): ISession {
+    const existing = sessions.get(id);
+    if (existing) return existing;
+    return createSession(undefined, id);
 }
 
 export function getSession(id: string): ISession | undefined {

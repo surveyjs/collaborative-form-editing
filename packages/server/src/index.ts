@@ -11,7 +11,10 @@ import type {
     IServerToClient,
     ISyncMessage
 } from "@collab/shared";
-import { applyMessage, createSession, deleteSession, getSession, snapshot } from "./session-store.js";
+import { applyMessage, createSession, deleteSession, getOrCreateSession, getSession, snapshot } from "./session-store.js";
+
+/** Custom (user-chosen) session ids: URL-safe, 1..128 chars. */
+const SESSION_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
 
 const PORT = Number(process.env.PORT ?? 8080);
 /** How long an empty session lingers before being garbage-collected (ms). */
@@ -131,13 +134,16 @@ const ourRequestHandler: http.RequestListener = async (req, res) => {
     }
 
     // GET /api/sessions/:id -> { sessionId, schema }
+    // If the session does not yet exist, create an empty one on the fly so that
+    // any user-chosen URL like /my-super-survey is a valid, joinable link.
     const match = /^\/api\/sessions\/([^/]+)$/.exec(url.pathname);
     if (req.method === "GET" && match) {
-        const session = getSession(match[1]);
-        if (!session) {
-            sendJson(res, 404, { error: "session not found" });
+        const id = match[1];
+        if (!SESSION_ID_RE.test(id)) {
+            sendJson(res, 400, { error: "invalid session id" });
             return;
         }
+        const session = getOrCreateSession(id);
         sendJson(res, 200, { sessionId: session.id, schema: snapshot(session) });
         return;
     }
@@ -228,11 +234,13 @@ httpServer.on("upgrade", (req, socket, head) => {
         return;
     }
     const sessionId = m[1];
-    if (!getSession(sessionId)) {
-        socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+    if (!SESSION_ID_RE.test(sessionId)) {
+        socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
         socket.destroy();
         return;
     }
+    // Auto-create on first connect so a freshly-typed URL just works.
+    getOrCreateSession(sessionId);
     wss.handleUpgrade(req, socket, head, (ws) => {
         const ctx: IClientCtx = { clientId: randomUUID(), sessionId };
         onConnection(ws, ctx);
@@ -275,9 +283,11 @@ function onConnection(ws: WebSocket, ctx: IClientCtx): void {
     });
 }
 
-httpServer.listen(PORT, () => {
+const HOST = process.env.HOST ?? "0.0.0.0";
+
+httpServer.listen(PORT, HOST, () => {
     // eslint-disable-next-line no-console
-    console.log(`collab server listening on http://localhost:${PORT}`);
+    console.log(`collab server listening on http://${HOST}:${PORT}`);
     if (IS_DEV) {
         // eslint-disable-next-line no-console
         console.log(`  serving client via Vite middleware (dev) from ${CLIENT_ROOT}`);
