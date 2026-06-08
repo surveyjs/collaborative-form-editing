@@ -1,11 +1,12 @@
 import type {
     IClientToServer,
     IServerToClient,
-    ISyncMessage
+    ISyncMessage,
+    ISyncStackSnapshot
 } from "@collab/shared";
 
 export interface ICollabClientHandlers {
-    onInit(schema: any, clientId: string): void;
+    onInit(schema: any, clientId: string, stack: ISyncStackSnapshot): void;
     onRemoteSync(message: ISyncMessage, fromClientId: string): void;
     onOpen?(): void;
     onClose?(ev: CloseEvent): void;
@@ -42,7 +43,7 @@ export class CollabClient {
         if (!parsed || typeof parsed !== "object") return;
         if (parsed.type === "init") {
             this._clientId = parsed.clientId;
-            this.handlers.onInit(parsed.schema, parsed.clientId);
+            this.handlers.onInit(parsed.schema, parsed.clientId, parsed.stack);
             return;
         }
         if (parsed.type === "sync") {

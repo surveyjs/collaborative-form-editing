@@ -12,7 +12,9 @@
     "scripts": {
         "dev": "npm -w @collab/server run dev",
         "build": "npm -w @collab/creator-undo-redo-sync run build && npm -w @collab/server run build && npm -w @collab/client run build",
-        "start": "npm run build && npm -w @collab/server run start"
+        "start": "npm run build && npm -w @collab/server run start",
+        "test:e2e": "playwright test",
+        "test:e2e:ui": "playwright test --ui"
     },
     "dependencies": {
         "react": "^17.0.2",
@@ -23,6 +25,7 @@
         "ws": "^8.18.0"
     },
     "devDependencies": {
+        "@playwright/test": "^1.51.0",
         "@types/node": "^22.5.0",
         "@types/react": "^17.0.83",
         "@types/react-dom": "^17.0.25",

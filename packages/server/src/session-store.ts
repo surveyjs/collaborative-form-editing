@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { SurveyModel } from "survey-core";
 import { UndoRedoManager } from "survey-creator-core";
 import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
-import type { ISyncMessage } from "@collab/shared";
+import type { ISessionSnapshot, ISyncMessage } from "@collab/shared";
 
 export interface ISession {
     id: string;
@@ -70,6 +70,15 @@ export function applyMessage(session: ISession, message: ISyncMessage): void {
     }
 }
 
-export function snapshot(session: ISession): any {
-    return session.surveyModel.toJSON();
+/**
+ * Full bootstrap state for a joining client: the current survey schema plus
+ * the shared undo/redo stack. The stack is exported from the session's
+ * authoritative `syncPlugin`, so a late joiner inherits the entire history
+ * and can undo/redo transactions authored by any peer before it connected.
+ */
+export function snapshot(session: ISession): ISessionSnapshot {
+    return {
+        schema: session.surveyModel.toJSON(),
+        stack: session.syncPlugin.exportStack()
+    };
 }

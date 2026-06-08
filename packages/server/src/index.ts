@@ -144,7 +144,7 @@ const ourRequestHandler: http.RequestListener = async (req, res) => {
             return;
         }
         const session = getOrCreateSession(id);
-        sendJson(res, 200, { sessionId: session.id, schema: snapshot(session) });
+        sendJson(res, 200, { sessionId: session.id, ...snapshot(session) });
         return;
     }
 
@@ -258,7 +258,7 @@ function onConnection(ws: WebSocket, ctx: IClientCtx): void {
     // eslint-disable-next-line no-console
     console.log(`[session ${ctx.sessionId}] + client ${ctx.clientId} (now ${session.clientCount})`);
 
-    send(ws, { type: "init", clientId: ctx.clientId, schema: snapshot(session) });
+    send(ws, { type: "init", clientId: ctx.clientId, ...snapshot(session) });
 
     ws.on("message", (data) => {
         let parsed: IClientToServer;

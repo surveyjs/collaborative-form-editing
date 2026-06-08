@@ -60,7 +60,7 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
             onOpen: () => setConn("connected"),
             onClose: () => setConn("disconnected"),
             onError: () => setConn("error"),
-            onInit: (schema, clientId) => {
+            onInit: (schema, clientId, stack) => {
                 setPeerId(clientId);
                 // Replace the schema; this rebuilds the survey + manager.
                 try {
@@ -68,7 +68,19 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
                 } catch {
                     creator.JSON = {};
                 }
-                ensureSyncPlugin();
+                // Adopt the shared undo/redo stack so a late joiner can
+                // undo/redo transactions authored before it connected. The
+                // plugin must be (re)bound to the freshly-rebuilt manager
+                // first; an empty stack is a harmless no-op.
+                const plugin = ensureSyncPlugin();
+                if (plugin) {
+                    try {
+                        plugin.importStack(stack);
+                    } catch (err) {
+                        // eslint-disable-next-line no-console
+                        console.warn("importStack failed", err);
+                    }
+                }
             },
             onRemoteSync: (message) => {
                 const plugin = ensureSyncPlugin();

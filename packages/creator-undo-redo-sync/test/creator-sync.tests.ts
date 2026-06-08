@@ -1,5 +1,7 @@
 import { CreatorTester } from "./creator-tester";
 import { UndoRedoSyncPlugin, ISyncMessage, ISyncStackSnapshot } from "../src";
+import { SurveyModel } from "survey-core";
+import { UndoRedoManager } from "survey-creator-core";
 import { describe, test, expect } from "vitest";
 
 // Each CreatorTester gets its own UndoRedoSyncPlugin attached on first
@@ -958,6 +960,99 @@ test("importStack drops the host's redo tail (only applied entries are exported)
   expect(creatorB.undoRedoManager.canRedo()).toBeFalsy();
   creatorB.undo();
   expect(creatorB.survey.title).toEqual("");
+});
+
+test("client joining via the server's exported stack (built from remote actions) inherits full undo/redo", () => {
+  // Production topology: the collaboration server keeps an authoritative
+  // sync plugin whose stack is built ENTIRELY from RemoteUndoRedoAction
+  // wrappers — it only ever applies peer messages, it never authors a
+  // native transaction itself. A late joiner bootstraps from
+  // `server.exportStack()` (shipped alongside the survey schema in the
+  // init handshake). This guards the path production uses but the
+  // host-side join test does not cover: exporting a stack whose entries
+  // are remote actions, then importing it into a fresh client.
+
+  // ----- The headless server: a duck-typed creator, exactly like session-store.ts -----
+  const serverSurvey = new SurveyModel({ pages: [{ name: "page1" }] });
+  const serverPlugin = new UndoRedoSyncPlugin(
+    { undoRedoManager: new UndoRedoManager(), survey: serverSurvey } as any
+  );
+
+  // ----- Host A edits; every wire message is applied to the server -----
+  const creatorA = new CreatorTester();
+  creatorA.JSON = { pages: [{ name: "page1" }] };
+  syncOf(creatorA).onSerializedChanges = (msg) =>
+    serverPlugin.applySerialized(JSON.parse(JSON.stringify(msg)));
+
+  creatorA.survey.title = "T1"; // tx 1: scalar
+  creatorA.survey.pages[0].addNewQuestion("text", "q1"); // tx 2: array insert
+  creatorA.survey.getQuestionByName("q1").title = "Q1 title"; // tx 3: nested scalar
+
+  // Server now mirrors A's state; its stack holds 3 remote-action entries.
+  expect(serverSurvey.title).toEqual("T1");
+  expect(serverSurvey.getQuestionByName("q1").locTitle.getLocaleText("")).toEqual("Q1 title");
+
+  // ----- Joiner C bootstraps from the SERVER snapshot (schema + stack) -----
+  const schemaSnapshot = JSON.parse(JSON.stringify(serverSurvey.toJSON()));
+  const stackSnapshot: ISyncStackSnapshot = JSON.parse(JSON.stringify(serverPlugin.exportStack()));
+  expect(stackSnapshot.entries).toHaveLength(3);
+  expect(stackSnapshot.cursor).toEqual(3);
+  // Each entry, though sourced from a remote-action stack, must still carry
+  // its id and pre-computed forward + inverse payloads.
+  for (const e of stackSnapshot.entries) {
+    expect(typeof e.id).toEqual("string");
+    expect(e.id.length).toBeGreaterThan(0);
+    expect(e.forward.length).toBeGreaterThan(0);
+    expect(e.inverse.length).toBeGreaterThan(0);
+  }
+
+  const creatorC = new CreatorTester();
+  creatorC.JSON = schemaSnapshot;
+  expect(creatorC.undoRedoManager.canUndo()).toBeFalsy();
+  syncOf(creatorC).importStack(stackSnapshot);
+  expect(creatorC.undoRedoManager.canUndo()).toBeTruthy();
+  expect(creatorC.undoRedoManager.canRedo()).toBeFalsy();
+
+  // ----- C undoes the host's pre-join transactions; the server mirrors -----
+  syncOf(creatorC).onSerializedChanges = (msg) =>
+    serverPlugin.applySerialized(JSON.parse(JSON.stringify(msg)));
+
+  creatorC.undo(); // undo tx 3 (nested title)
+  expect(creatorC.survey.getQuestionByName("q1").locTitle.getLocaleText("")).toEqual("");
+  expect(serverSurvey.getQuestionByName("q1").locTitle.getLocaleText("")).toEqual("");
+
+  creatorC.undo(); // undo tx 2 (question add) — array action via RemoteBulkAction
+  expect(creatorC.survey.getQuestionByName("q1")).toBeFalsy();
+  expect(serverSurvey.getQuestionByName("q1")).toBeFalsy();
+
+  // ----- C redoes; both come back in order -----
+  creatorC.redo();
+  expect(creatorC.survey.getQuestionByName("q1")).toBeTruthy();
+  expect(serverSurvey.getQuestionByName("q1")).toBeTruthy();
+
+  creatorC.redo();
+  expect(creatorC.survey.getQuestionByName("q1").locTitle.getLocaleText("")).toEqual("Q1 title");
+  expect(serverSurvey.getQuestionByName("q1").locTitle.getLocaleText("")).toEqual("Q1 title");
+});
+
+test("a session with no history still ships a valid, empty stack snapshot", () => {
+  // The init handshake always carries a stack; for a fresh session it is
+  // a well-formed empty snapshot, and importing it is a harmless no-op.
+  const serverSurvey = new SurveyModel({ pages: [{ name: "page1" }] });
+  const serverPlugin = new UndoRedoSyncPlugin(
+    { undoRedoManager: new UndoRedoManager(), survey: serverSurvey } as any
+  );
+
+  const stackSnapshot = serverPlugin.exportStack();
+  expect(stackSnapshot.kind).toEqual("stack");
+  expect(stackSnapshot.cursor).toEqual(0);
+  expect(stackSnapshot.entries).toHaveLength(0);
+
+  const creatorC = new CreatorTester();
+  creatorC.JSON = JSON.parse(JSON.stringify(serverSurvey.toJSON()));
+  syncOf(creatorC).importStack(JSON.parse(JSON.stringify(stackSnapshot)));
+  expect(creatorC.undoRedoManager.canUndo()).toBeFalsy();
+  expect(creatorC.undoRedoManager.canRedo()).toBeFalsy();
 });
 
 // ---------------------------------------------------------------------------
