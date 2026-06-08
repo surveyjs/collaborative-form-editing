@@ -283,7 +283,7 @@ function onConnection(ws: WebSocket, ctx: IClientCtx): void {
     });
 }
 
-const HOST = process.env.HOST ?? "0.0.0.0";
+const HOST = process.env.HOST ?? "localhost";
 
 httpServer.listen(PORT, HOST, () => {
     // eslint-disable-next-line no-console
