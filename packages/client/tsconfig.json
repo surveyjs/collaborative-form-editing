@@ -12,12 +12,6 @@
         "rootDir": "src",
         "outDir": "dist",
         "noEmit": true,
-        "baseUrl": ".",
-        "paths": {
-            "@collab/shared": [
-                "../../protocol/index.d.ts"
-            ]
-        },
         "types": []
     },
     "include": [

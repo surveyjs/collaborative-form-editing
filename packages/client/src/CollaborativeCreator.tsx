@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { SurveyCreator, SurveyCreatorComponent } from "survey-creator-react";
+import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
 import type { ISyncMessage } from "@collab/shared";
 import { CollabClient } from "./collab-client";
 
@@ -25,22 +26,34 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
     }, [props.sessionId]);
 
     const clientRef = useRef<CollabClient | null>(null);
+    const pluginRef = useRef<UndoRedoSyncPlugin | null>(null);
+    // The UndoRedoManager instance the current plugin is bound to. The
+    // creator replaces its manager whenever it rebuilds the survey (e.g. on
+    // `creator.JSON = ...`), so we recreate the plugin when it changes.
+    const boundManagerRef = useRef<unknown>(null);
     const [conn, setConn] = useState<ConnState>("connecting");
     const [peerId, setPeerId] = useState<string | null>(null);
 
     useEffect(() => {
         const wsUrl = buildWsUrl(props.sessionId);
 
-        // Attaches `onSerializedChanges` on the *current* UndoRedoManager.
-        // The manager is replaced whenever the creator rebuilds the survey
-        // (e.g. on `creator.JSON = ...`), so this must be called after each
-        // such replacement.
-        const attachOutgoing = () => {
+        // (Re)bind the UndoRedoSyncPlugin to the creator's *current*
+        // UndoRedoManager. Outbound wire messages are forwarded to the
+        // server; inbound messages are fed back via `plugin.applySerialized`.
+        const ensureSyncPlugin = (): UndoRedoSyncPlugin | null => {
             const manager = creator.undoRedoManager;
-            if (!manager) return;
-            manager.onSerializedChanges = (message: ISyncMessage) => {
+            if (!manager) return pluginRef.current;
+            if (pluginRef.current && boundManagerRef.current === manager) {
+                return pluginRef.current;
+            }
+            pluginRef.current?.dispose();
+            const plugin = new UndoRedoSyncPlugin(creator);
+            plugin.onSerializedChanges = (message: ISyncMessage) => {
                 clientRef.current?.sendSync(message);
             };
+            pluginRef.current = plugin;
+            boundManagerRef.current = manager;
+            return plugin;
         };
 
         const client = new CollabClient(wsUrl, {
@@ -55,19 +68,17 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
                 } catch {
                     creator.JSON = {};
                 }
-                attachOutgoing();
+                ensureSyncPlugin();
             },
             onRemoteSync: (message) => {
-                const manager = creator.undoRedoManager;
-                if (!manager) return;
+                const plugin = ensureSyncPlugin();
+                if (!plugin) return;
                 try {
-                    manager.applySerialized(message);
+                    plugin.applySerialized(message);
                 } catch (err) {
                     // eslint-disable-next-line no-console
                     console.warn("applySerialized failed", err);
                 }
-                // Re-attach in case the manager instance changed underneath us.
-                attachOutgoing();
             }
         });
         clientRef.current = client;
@@ -75,8 +86,9 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
         return () => {
             client.dispose();
             clientRef.current = null;
-            const manager = creator.undoRedoManager;
-            if (manager) manager.onSerializedChanges = undefined as any;
+            pluginRef.current?.dispose();
+            pluginRef.current = null;
+            boundManagerRef.current = null;
         };
     }, [creator, props.sessionId]);
 

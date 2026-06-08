@@ -1,12 +1,12 @@
 // Wire-protocol envelope types shared by client and server.
 //
-// The payload itself (`ISyncMessage`) is the format produced by
-// survey-creator-core's `UndoRedoManager.onSerializedChanges` and consumed
-// by `applySerialized()`. We re-export it from survey-creator-core so the
-// wire format always tracks the canonical definition.
+// The payload itself (`ISyncMessage`) is the format produced by the
+// `UndoRedoSyncPlugin`'s `onSerializedChanges` and consumed by its
+// `applySerialized()`. We re-export it from the plugin package so the wire
+// format always tracks the canonical definition.
 
-export type { ISyncMessage, ISyncAction } from "survey-creator-core";
-import type { ISyncMessage } from "survey-creator-core";
+export type { ISyncMessage, ISyncAction } from "@collab/creator-undo-redo-sync";
+import type { ISyncMessage } from "@collab/creator-undo-redo-sync";
 
 // ---------------------------------------------------------------------------
 // WebSocket envelopes

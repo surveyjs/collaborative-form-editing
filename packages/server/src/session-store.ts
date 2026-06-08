@@ -1,13 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { SurveyModel } from "survey-core";
 import { UndoRedoManager } from "survey-creator-core";
+import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
 import type { ISyncMessage } from "@collab/shared";
 
 export interface ISession {
     id: string;
     surveyModel: SurveyModel;
-    /** A manager bound to `surveyModel`, reused for every incoming message. */
-    undoRedoManager: UndoRedoManager;
+    /**
+     * Sync plugin bound to `surveyModel`, reused for every incoming message.
+     * It owns the authoritative transaction stack so undo/redo from any peer
+     * is reflected in the server snapshot.
+     */
+    syncPlugin: UndoRedoSyncPlugin;
     /** Connected client IDs are kept by the WS layer; we expose only the count. */
     clientCount: number;
 }
@@ -16,8 +21,12 @@ const sessions = new Map<string, ISession>();
 
 function makeSession(id: string, surveyModel: SurveyModel): ISession {
     const undoRedoManager = new UndoRedoManager();
-    undoRedoManager.survey = surveyModel;
-    return { id, surveyModel, undoRedoManager, clientCount: 0 };
+    // The plugin only ever touches `creator.undoRedoManager` and
+    // `creator.survey`, so a minimal duck-typed creator is all the headless
+    // server needs — no full SurveyCreatorModel required.
+    const pseudoCreator = { undoRedoManager, survey: surveyModel } as any;
+    const syncPlugin = new UndoRedoSyncPlugin(pseudoCreator);
+    return { id, surveyModel, syncPlugin, clientCount: 0 };
 }
 
 export function createSession(initialSchema?: any, id?: string): ISession {
@@ -43,14 +52,18 @@ export function deleteSession(id: string): void {
     sessions.delete(id);
 }
 
-/** Apply every action in the message to the session's authoritative model. */
+/**
+ * Apply a peer message (transaction / undo / redo) to the session's
+ * authoritative model, keeping the server snapshot in sync with the shared
+ * undo/redo stack.
+ */
 export function applyMessage(session: ISession, message: ISyncMessage): void {
-    if (!message || message.kind !== "transaction" || !Array.isArray(message.actions)) return;
+    if (!message) return;
     try {
-        // The manager already detaches the survey's change observer and
-        // sets `_ignoreChanges` while applying, so this won't enter any
-        // local undo stack or fire callbacks.
-        session.undoRedoManager.applySerialized(message as any);
+        // applySerialized suspends the manager and detaches the survey's
+        // change observer while applying, so this won't fire callbacks or
+        // re-enter any stack other than the synthetic shared one.
+        session.syncPlugin.applySerialized(message);
     } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(`[session ${session.id}] failed to apply message`, err);

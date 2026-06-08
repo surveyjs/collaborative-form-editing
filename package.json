@@ -4,12 +4,14 @@
     "version": "0.1.0",
     "description": "Collaborative editing service for SurveyJS Creator",
     "workspaces": [
+        "packages/creator-undo-redo-sync",
+        "packages/protocol",
         "packages/server",
         "packages/client"
     ],
     "scripts": {
         "dev": "npm -w @collab/server run dev",
-        "build": "npm -w @collab/server run build && npm -w @collab/client run build",
+        "build": "npm -w @collab/creator-undo-redo-sync run build && npm -w @collab/server run build && npm -w @collab/client run build",
         "start": "npm run build && npm -w @collab/server run start"
     },
     "dependencies": {
