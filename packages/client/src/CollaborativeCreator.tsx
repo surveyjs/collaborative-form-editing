@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import { surveyLocalization } from "survey-core";
 import { SurveyCreator, SurveyCreatorComponent } from "survey-creator-react";
 import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
 import type { ISyncMessage } from "@collab/shared";
 import { CollabClient } from "./collab-client";
+import { messageNeedsTranslationRebuild } from "./translation-refresh";
 
 export interface ICollaborativeCreatorProps {
     sessionId: string;
@@ -56,6 +58,28 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
             return plugin;
         };
 
+        // Remote edits mutate `creator.survey` in place. The Designer/Preview
+        // tabs are bound to it directly, but the Translations tab keeps its own
+        // snapshot model (a TranslationGroup tree + a `stringsSurvey` matrix)
+        // that is only rebuilt on activation. So while that tab is active we
+        // refresh it ourselves, using the lightest method that's correct for
+        // the change:
+        //   - value-only edit (a localizable string in an existing locale
+        //     column) -> `updateStringsSurveyData()` re-reads values in place,
+        //     leaving the matrix/columns/scroll intact.
+        //   - structural change (row added/removed, a new locale column, or an
+        //     undo/redo we can't classify) -> full `reset()`.
+        const refreshTranslationTab = (message: ISyncMessage): void => {
+            if (creator.activeTab !== "translation") return;
+            const model = (creator.getPlugin("translation", false) as any)?.model;
+            if (!model) return;
+            if (needsTranslationRebuild(message, model)) {
+                model.reset?.();
+            } else {
+                model.updateStringsSurveyData?.();
+            }
+        };
+
         const client = new CollabClient(wsUrl, {
             onOpen: () => setConn("connected"),
             onClose: () => setConn("disconnected"),
@@ -87,6 +111,7 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
                 if (!plugin) return;
                 try {
                     plugin.applySerialized(message);
+                    refreshTranslationTab(message);
                 } catch (err) {
                     // eslint-disable-next-line no-console
                     console.warn("applySerialized failed", err);
@@ -121,6 +146,19 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
 function buildWsUrl(sessionId: string): string {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     return `${proto}//${window.location.host}/ws/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+// Decide whether a freshly-applied remote message changed the *structure* the
+// Translations tab renders (rows or locale columns), which needs a full
+// `reset()`, versus only the *value* of an existing cell, which the lighter
+// `updateStringsSurveyData()` can pick up in place. The decision logic lives in
+// the pure, unit-tested `messageNeedsTranslationRebuild`; here we just gather
+// its inputs from the live model and survey-core. `model.locales` is
+// ["", ...selectedLocales] where "" is the default-locale column.
+function needsTranslationRebuild(message: ISyncMessage, model: any): boolean {
+    const columns: string[] = Array.isArray(model.locales) ? model.locales : [];
+    const localeCodes = new Set<string>(surveyLocalization.getLocales());
+    return messageNeedsTranslationRebuild(message, columns, localeCodes);
 }
 
 function ConnectionBar(props: {
