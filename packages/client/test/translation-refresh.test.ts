@@ -1,61 +1,82 @@
 import { describe, it, expect } from "vitest";
-import { messageNeedsTranslationRebuild } from "../src/translation-refresh";
+import { planTranslationRefresh } from "../src/translation-refresh";
 import type { ISyncMessage } from "@collab/shared";
 
-// Locale codes "registered" with survey-core for these tests. "default" is a
-// reserved token (not in this set) and maps to the model's "" column.
-const REGISTERED = new Set<string>(["en", "de", "fr", "es"]);
-// Columns the Translations tab currently shows: default + en + de.
-const COLUMNS = ["", "en", "de"];
+// Registered locale codes ("default" is a reserved token, not in this set, and
+// maps to the "" default column).
+const LOCALE_CODES = new Set<string>(["en", "de", "fr", "es", "it"]);
+// Language list rows: en + de (shown) and it (listed but unchecked).
+const VISIBLE = new Set<string>(["en", "de", "it"]);
+
+const CTX = { visible: VISIBLE, localeCodes: LOCALE_CODES };
 
 function tx(...actions: any[]): ISyncMessage {
     return { kind: "transaction", id: "t1", actions } as ISyncMessage;
 }
+function prop(locator: string, value: any = "x"): any {
+    return { kind: "property", locator, value };
+}
 
-describe("messageNeedsTranslationRebuild", () => {
-    it("uses the light path for a text edit in an existing locale column", () => {
-        const msg = tx({ kind: "property", locator: "/pages/0/elements/0/title/de", value: "Titel" });
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(false);
+describe("planTranslationRefresh", () => {
+    it("updates (no new locale) for a text edit in a listed locale", () => {
+        const plan = planTranslationRefresh(tx(prop("/pages/0/elements/0/title/de")), CTX);
+        expect(plan).toEqual({ kind: "update", newLocales: [] });
     });
 
-    it("uses the light path for a default-locale text edit", () => {
-        const msg = tx({ kind: "property", locator: "/pages/0/elements/0/title/default", value: "Title" });
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(false);
+    it("updates (no new locale) for a default-locale text edit", () => {
+        const plan = planTranslationRefresh(tx(prop("/pages/0/elements/0/title/default")), CTX);
+        expect(plan).toEqual({ kind: "update", newLocales: [] });
     });
 
-    it("uses the light path when every action is an existing-locale text edit", () => {
-        const msg = tx(
-            { kind: "property", locator: "/pages/0/elements/0/title/en", value: "Q1" },
-            { kind: "property", locator: "/pages/0/elements/1/title/de", value: "Frage 2" }
+    it("updates (no new locale) for a locale that's listed but unchecked", () => {
+        const plan = planTranslationRefresh(tx(prop("/pages/0/elements/0/title/it")), CTX);
+        expect(plan).toEqual({ kind: "update", newLocales: [] });
+    });
+
+    it("registers a brand-new locale (not in the list)", () => {
+        const plan = planTranslationRefresh(tx(prop("/pages/0/elements/0/title/fr")), CTX);
+        expect(plan).toEqual({ kind: "update", newLocales: ["fr"] });
+    });
+
+    it("registers the new locale once for a mixed message", () => {
+        const plan = planTranslationRefresh(
+            tx(prop("/pages/0/elements/0/title/de"), prop("/pages/0/elements/1/title/fr")),
+            CTX
         );
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(false);
+        expect(plan).toEqual({ kind: "update", newLocales: ["fr"] });
     });
 
-    it("rebuilds when a locale has no column yet (new column)", () => {
-        const msg = tx({ kind: "property", locator: "/pages/0/elements/0/title/fr", value: "Titre" });
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(true);
+    it("dedupes repeated new locales", () => {
+        const plan = planTranslationRefresh(
+            tx(prop("/pages/0/elements/0/title/fr"), prop("/pages/0/elements/1/title/fr")),
+            CTX
+        );
+        expect(plan).toEqual({ kind: "update", newLocales: ["fr"] });
     });
 
     it("rebuilds on an array action (row added/removed)", () => {
-        const msg = tx({ kind: "array", locator: "/pages/0/elements/1", value: [{ type: "text", name: "q2" }] });
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(true);
+        const plan = planTranslationRefresh(
+            tx({ kind: "array", locator: "/pages/0/elements/1", value: [{ type: "text", name: "q2" }] }),
+            CTX
+        );
+        expect(plan).toEqual({ kind: "rebuild" });
     });
 
     it("rebuilds on a non-localizable property change (e.g. a name rename)", () => {
-        const msg = tx({ kind: "property", locator: "/pages/0/elements/0/name", value: "renamed" });
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(true);
+        const plan = planTranslationRefresh(tx(prop("/pages/0/elements/0/name", "renamed")), CTX);
+        expect(plan).toEqual({ kind: "rebuild" });
     });
 
     it("rebuilds if any action in the transaction is structural", () => {
-        const msg = tx(
-            { kind: "property", locator: "/pages/0/elements/0/title/de", value: "Titel" },
-            { kind: "array", locator: "/pages/0/elements/2", value: null }
+        const plan = planTranslationRefresh(
+            tx(prop("/pages/0/elements/0/title/de"), { kind: "array", locator: "/pages/0/elements/2", value: null }),
+            CTX
         );
-        expect(messageNeedsTranslationRebuild(msg, COLUMNS, REGISTERED)).toBe(true);
+        expect(plan).toEqual({ kind: "rebuild" });
     });
 
     it("rebuilds for undo/redo messages (no action payload to classify)", () => {
-        expect(messageNeedsTranslationRebuild({ kind: "undo", id: "t1" } as ISyncMessage, COLUMNS, REGISTERED)).toBe(true);
-        expect(messageNeedsTranslationRebuild({ kind: "redo", id: "t1" } as ISyncMessage, COLUMNS, REGISTERED)).toBe(true);
+        expect(planTranslationRefresh({ kind: "undo", id: "t1" } as ISyncMessage, CTX)).toEqual({ kind: "rebuild" });
+        expect(planTranslationRefresh({ kind: "redo", id: "t1" } as ISyncMessage, CTX)).toEqual({ kind: "rebuild" });
     });
 });
