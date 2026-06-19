@@ -124,6 +124,23 @@ export async function changeInputType(page: Page, name: string, targetInputType:
     }).toPass({ timeout: 20_000 });
 }
 
+/**
+ * Add a translation language via the Translations-tab sidebar "Add Language"
+ * dropdown. `languageName` is the language's NATIVE display name as shown both in
+ * the dropdown and afterwards in the language list (e.g. "Français", "Deutsch").
+ *
+ * The control is the title action of the sidebar "Languages" matrix; its button
+ * carries `title="Add Language"` (the English editor-locale tooltip). The popup is
+ * a menu of `role="menuitem"` entries named by native language name. Unlike the
+ * design-surface convert dropdowns it stays open until a selection or an outside
+ * click, so a single click opens it and we then click the language entry (whose
+ * accessible name is unique to this popup, so no extra scoping is needed).
+ */
+export async function addLanguage(page: Page, languageName: string): Promise<void> {
+    await page.locator('button[title="Add Language"]').first().click();
+    await page.getByRole("menuitem", { name: languageName, exact: true }).click();
+}
+
 /** The Undo toolbar button (action-bar). */
 export function undoButton(page: Page): Locator {
     return page.getByRole("button", { name: "Undo", exact: true });

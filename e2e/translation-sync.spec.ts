@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { openSession } from "./utils";
+import { openSession, addLanguage } from "./utils";
 
 // A survey pre-seeded with two questions (two translatable title strings) so the
 // two clients can edit DIFFERENT translation cells. Seeding via the server API
@@ -12,6 +12,19 @@ const TWO_QUESTION_SCHEMA = {
                 { type: "text", name: "question1", title: "Q1 title" },
                 { type: "text", name: "question2", title: "Q2 title" }
             ]
+        }
+    ]
+};
+
+// A single question with ONLY a default-locale title (no extra locales). The
+// strings table therefore starts with exactly one column (one translatable cell)
+// per client, so adding a brand-new language is observable as a column-count
+// change and isolates the "new locale" sync path.
+const ONE_QUESTION_SCHEMA = {
+    pages: [
+        {
+            name: "page1",
+            elements: [{ type: "text", name: "question1", title: "Q1 title" }]
         }
     ]
 };
@@ -139,5 +152,59 @@ test.describe("collaborative translation sync", () => {
         await expect(cellsA.nth(frIdx)).toHaveValue("FR_B");
         await expect(cellsB.nth(deIdx)).toHaveValue("DE_A");
         await expect(cellsB.nth(frIdx)).toHaveValue("FR_B");
+    });
+
+    // A locale that one client newly introduces must reach the other client as a
+    // LANGUAGE-LIST entry only -- never as a strings-table column. The refresh
+    // (planTranslationRefresh) registers a brand-new locale as an *unchecked* row:
+    // it appears in the sidebar list so the receiver can opt in, but their matrix
+    // columns stay untouched. Otherwise an edit in a language you never enabled
+    // would silently widen your table.
+    test("a new language added by one client shows in the other's language list but not as a matrix column", async ({ page, context, request }) => {
+        const created = await request.post("/api/sessions", { data: { schema: ONE_QUESTION_SCHEMA } });
+        expect(created.ok()).toBeTruthy();
+        const { sessionId } = await created.json();
+
+        const tabA = page;
+        const tabB = await context.newPage();
+        await openSession(tabA, sessionId);
+        await openSession(tabB, sessionId);
+
+        await tabA.locator("#tab-translation").click();
+        await tabB.locator("#tab-translation").click();
+
+        const cellsA = tabA.locator(".st-strings textarea");
+        const cellsB = tabB.locator(".st-strings textarea");
+        // Default locale only -> exactly one translatable cell on each client.
+        await expect(cellsA).toHaveCount(1);
+        await expect(cellsB).toHaveCount(1);
+
+        // The sidebar "Languages" matrix is the language list. Scope to VISIBLE
+        // matches: that same matrix hosts the (display:none) "Add Language" popup,
+        // whose menu lists every language, so an unscoped text match would always
+        // "find" French.
+        const frenchRowB = tabB
+            .locator(".svc-side-bar [data-name='locales']")
+            .getByText("Français", { exact: true })
+            .filter({ visible: true });
+        await expect(frenchRowB).toHaveCount(0);
+
+        // A adds French via the sidebar dropdown -> a fr column appears on A (and,
+        // for now, only on A).
+        await addLanguage(tabA, "Français");
+        await expect(cellsA).toHaveCount(2);
+
+        // A writes a French translation and commits it (blur) -> broadcast to B.
+        // The fr cell is the newly added (empty) second column.
+        await cellsA.nth(1).click();
+        await cellsA.nth(1).fill("Bonjour");
+        await cellsA.nth(1).blur();
+
+        // B registers the new locale in its language list (so B can later enable
+        // it) ...
+        await expect(frenchRowB).toHaveCount(1);
+        // ... but B's strings table is NOT widened: fr stays an unchecked row, not
+        // a column.
+        await expect(cellsB).toHaveCount(1);
     });
 });
