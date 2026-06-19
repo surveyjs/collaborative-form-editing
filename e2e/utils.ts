@@ -141,6 +141,82 @@ export async function addLanguage(page: Page, languageName: string): Promise<voi
     await page.getByRole("menuitem", { name: languageName, exact: true }).click();
 }
 
+/**
+ * Open the Logic tab and wait until its rule list has rendered.
+ *
+ * The tab button is `#tab-logic` (TabbedMenu renders `id={"tab-" + item.id}`).
+ * The Logic tab keeps its own snapshot model that is built on activation, so we
+ * wait for the rules matrix (`.sl-table`) before interacting.
+ */
+export async function openLogicTab(page: Page): Promise<void> {
+    await page.locator("#tab-logic").click();
+    await expect(page.locator(".svc-logic-tab .sl-table").first()).toBeVisible();
+}
+
+/**
+ * A logic rule's row in the rules matrix, located by a substring of its
+ * human-readable summary (e.g. the target question name `'q2'`). Scoping by
+ * text lets a test address a specific rule without depending on row order.
+ */
+export function logicRuleRow(page: Page, match: string): Locator {
+    return page.locator(".sl-table__row").filter({ hasText: match }).first();
+}
+
+/**
+ * The display-text element of a logic rule row. The Logic matrix renders each
+ * rule's human-readable summary (e.g. "If 'q1' == 1, make question 'q2'
+ * visible") as a `svc-link-value-button` span. Its text is the most stable
+ * cross-client signal that the rule list rebuilt, so tests assert on it.
+ *
+ * Pass `match` (e.g. `'q2'`) to target a specific rule; omit it for the first.
+ */
+export function logicRuleText(page: Page, match?: string): Locator {
+    if (match === undefined) return page.locator(".sl-table .svc-link-value-button").first();
+    return logicRuleRow(page, match).locator(".svc-link-value-button").first();
+}
+
+/**
+ * Open a rule's modal detail editor by clicking its row "Show Details" toggle.
+ * The toggle's title flips to "Hide Details" once expanded. Pass `match` to
+ * pick a specific rule's row; omit it for the first row.
+ */
+export async function openLogicRuleDetail(page: Page, match?: string): Promise<void> {
+    const scope = match === undefined ? page : logicRuleRow(page, match);
+    await scope.locator('button[title="Show Details"]').first().click();
+    await expect(page.locator('button[title="Hide Details"]').first()).toBeVisible();
+}
+
+/** Collapse the open rule detail editor (returns the model to "view" mode). */
+export async function closeLogicRuleDetail(page: Page): Promise<void> {
+    await page.locator('button[title="Hide Details"]').first().click();
+}
+
+/**
+ * The condition's value `<input>` inside the rule detail editor's condition
+ * builder (the `svc-logic-question-value` question). With a single condition
+ * there is exactly one such input; it holds the right-hand comparison value.
+ */
+export function logicConditionValueInput(page: Page): Locator {
+    return page.locator(".svc-logic-question-value input").first();
+}
+
+/**
+ * Set the condition's right-hand value in the open rule detail editor. The
+ * value is a survey text question that commits on BLUR, so a bare `fill`
+ * followed by clicking "Done" loses the edit — we explicitly blur first.
+ */
+export async function setLogicConditionValue(page: Page, value: string): Promise<void> {
+    const input = logicConditionValueInput(page);
+    await input.click();
+    await input.fill(value);
+    await input.blur();
+}
+
+/** The "Done" button that commits the edited rule and closes the detail editor. */
+export function logicDoneButton(page: Page): Locator {
+    return page.getByRole("button", { name: "Done", exact: true });
+}
+
 /** The Undo toolbar button (action-bar). */
 export function undoButton(page: Page): Locator {
     return page.getByRole("button", { name: "Undo", exact: true });

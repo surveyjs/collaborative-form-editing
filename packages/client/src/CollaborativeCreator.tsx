@@ -5,6 +5,7 @@ import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
 import type { ISyncMessage } from "@collab/shared";
 import { CollabClient } from "./collab-client";
 import { planTranslationRefresh, applyTranslationRefresh } from "./translation-refresh";
+import { planLogicRefresh, applyLogicRefresh } from "./logic-refresh";
 
 export interface ICollaborativeCreatorProps {
     sessionId: string;
@@ -33,6 +34,14 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
     // creator replaces its manager whenever it rebuilds the survey (e.g. on
     // `creator.JSON = ...`), so we recreate the plugin when it changes.
     const boundManagerRef = useRef<unknown>(null);
+    // A remote refresh that arrived while the Logic tab's detail editor was open
+    // was deferred; this remembers to rebuild once the user returns to the list.
+    const pendingLogicRebuildRef = useRef(false);
+    // The Logic model our "item saved" flush handler is bound to, plus the
+    // handler itself. The creator recreates the model whenever it rebuilds the
+    // survey (e.g. `creator.JSON = ...`), so we re-bind when it changes.
+    const logicWatchedModelRef = useRef<any>(null);
+    const logicSavedHandlerRef = useRef<(() => void) | null>(null);
     const [conn, setConn] = useState<ConnState>("connecting");
     const [peerId, setPeerId] = useState<string | null>(null);
 
@@ -77,6 +86,45 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
             applyTranslationRefresh(model, plan);
         };
 
+        // The Logic tab, like Translations, keeps its own snapshot model
+        // (a list of logic rules built only on activation) that does not react
+        // to in-place survey mutations. We rebuild it ourselves while it is the
+        // active tab. The catch: the Logic tab edits ONE rule at a time in a
+        // modal detail editor and exposes only a full `model.update()` (no soft
+        // refresh). Rebuilding mid-edit would discard the user's unsaved rule,
+        // so while a rule is open (`mode !== "view"`) we DEFER the rebuild and
+        // flush it when the user saves the rule (`onLogicItemSaved`). The model's
+        // `mode` is a plain getter, not a tracked survey property, so it cannot
+        // be observed via registerFunctionOnPropertyValueChanged — the save event
+        // is the reliable "user finished editing" signal.
+        const refreshLogicTab = (message: ISyncMessage): void => {
+            if (creator.activeTab !== "logic") return;
+            const model = (creator.getPlugin("logic", false) as any)?.model;
+            if (!model) return;
+
+            // (Re)bind the flush handler to the current model. We only swap when
+            // the model instance itself changed (it is recreated on JSON reset).
+            if (logicWatchedModelRef.current !== model) {
+                const prev = logicWatchedModelRef.current;
+                if (prev && logicSavedHandlerRef.current) {
+                    prev.onLogicItemSaved?.remove?.(logicSavedHandlerRef.current);
+                }
+                const handler = (): void => {
+                    if (pendingLogicRebuildRef.current) {
+                        pendingLogicRebuildRef.current = false;
+                        model.update?.();
+                    }
+                };
+                logicSavedHandlerRef.current = handler;
+                model.onLogicItemSaved?.add?.(handler);
+                logicWatchedModelRef.current = model;
+            }
+
+            const plan = planLogicRefresh(message, { isEditing: model.mode !== "view" });
+            const deferred = applyLogicRefresh(model, plan);
+            if (deferred) pendingLogicRebuildRef.current = true;
+        };
+
         const client = new CollabClient(wsUrl, {
             onOpen: () => setConn("connected"),
             onClose: () => setConn("disconnected"),
@@ -109,6 +157,7 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
                 try {
                     plugin.applySerialized(message);
                     refreshTranslationTab(message);
+                    refreshLogicTab(message);
                 } catch (err) {
                     // eslint-disable-next-line no-console
                     console.warn("applySerialized failed", err);
@@ -123,6 +172,12 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
             pluginRef.current?.dispose();
             pluginRef.current = null;
             boundManagerRef.current = null;
+            if (logicWatchedModelRef.current && logicSavedHandlerRef.current) {
+                logicWatchedModelRef.current.onLogicItemSaved?.remove?.(logicSavedHandlerRef.current);
+            }
+            logicWatchedModelRef.current = null;
+            logicSavedHandlerRef.current = null;
+            pendingLogicRebuildRef.current = false;
         };
     }, [creator, props.sessionId]);
 
