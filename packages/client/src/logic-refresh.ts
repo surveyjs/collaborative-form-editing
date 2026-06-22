@@ -55,3 +55,46 @@ export function applyLogicRefresh(model: any, plan: LogicRefreshPlan): boolean {
     }
     return true; // deferred
 }
+
+/**
+ * Wire a "flush the deferred rebuild" trigger that fires the moment the local
+ * user LEAVES the detail editor — whether they SAVE the rule (Done) or CANCEL it
+ * (collapse the panel). Returns an unbind function.
+ *
+ * Why not just the public `onLogicItemSaved` event? It fires on save only.
+ * Consider the case this exists for: A starts a *new* rule (mode "new"), a remote
+ * insert from B arrives and is deferred, then A *cancels*. No save event ever
+ * fires, so a flush bound to `onLogicItemSaved` alone would never run and B's
+ * rule would stay missing from A's list until the tab is re-activated.
+ *
+ * The one model signal common to BOTH exits is the `mode -> "view"` transition.
+ * `mode` bypasses survey-core's property tracking (its setter writes a backing
+ * field directly), so it cannot be observed via
+ * registerFunctionOnPropertyValueChanged. The setter does, however, call the
+ * model's `onEndEditing()` on every new|edit -> view transition. We wrap that
+ * method: run the model's own teardown first, then our flush. By then `mode` is
+ * already "view" and (on save) the new item is already committed to `items`, so
+ * a `model.update()` inside the flush rebuilds a consistent list — and is
+ * re-entrancy-safe because update()'s own `mode = "view"` is a guarded no-op
+ * (view -> view) at that point.
+ *
+ * `flush` MUST be idempotent: on save it can be invoked twice (once by the
+ * caller's `onLogicItemSaved` handler, once here), so it should clear its own
+ * "pending" flag and no-op when nothing is pending.
+ */
+export function bindLogicEditEndFlush(model: any, flush: () => void): () => void {
+    const original: (() => void) | undefined =
+        typeof model?.onEndEditing === "function" ? model.onEndEditing.bind(model) : undefined;
+    const patched = function patchedOnEndEditing(this: unknown): void {
+        original?.();
+        flush();
+    };
+    model.onEndEditing = patched;
+    return () => {
+        // Only unbind if a later binding hasn't already replaced ours. Deleting
+        // the own property restores the prototype method.
+        if (model.onEndEditing === patched) {
+            delete model.onEndEditing;
+        }
+    };
+}
