@@ -1,109 +1,98 @@
-# survey-creator-collaboration
+# Collaborative Form Editing by SurveyJS
 
-Collaborative editing service for [SurveyJS Creator](../survey-creator).
+A real-time collaborative survey editing system built with [Survey Creator by SurveyJS](https://surveyjs.io/survey-creator/documentation/overview). Multiple users can edit the same survey simultaneously, similar to Google Docs for form design.
 
-A small Node.js HTTP + WebSocket server and a React client that embeds
-SurveyJS Creator and synchronises every edit between all connected clients
-by relaying the JSON sync messages produced by the creator's
-`UndoRedoManager` (`onSerializedChanges` / `applySerialized`).
+- **Frontend** &ndash; React + SurveyJS Creator (`survey-core`, `survey-creator-core`, `survey-creator-react`)
+- **Backend** &ndash; Node.js + Express + WebSocket
+- **Storage** &ndash; In-memory sessions (MVP, no persistence or auth)
 
-## Layout
+## How It Works
 
-```
-protocol/
-  index.d.ts        wire-protocol envelope types shared by client & server
-                    (imported as the `@collab/shared` alias)
-packages/
-  server/           Node.js HTTP + WebSocket server
-                    (owns one SurveyModel per session; in dev also hosts
-                    the client via Vite middleware on the same port)
-  client/           React app embedding survey-creator-react
-```
+- Users join or create a session via a session ID.
+- Each session stores a Survey Creator model on the server in memory.
+- Every edit in the creator is captured as a serialized change message.
+- Changes are sent to the server over WebSocket and broadcast to other clients.
+- Receiving clients apply updates to their local Survey Creator instance.
+- Temporary suppression of local change listeners prevents update loops.
+- Ordering is server-driven (last-write-wins at message level).
 
-There is no separate `shared` package — the protocol types live in
-`protocol/index.d.ts` and are wired in via path aliases (Vite alias in the
-client, TS path mapping in the server's `tsconfig.json`).
+## Server Setup
 
-## Prerequisites
+- Express serves the API and WebSocket endpoint.
+- In development, the client is served via Vite middleware on the same port.
+- In production, static assets are served from the built client bundle.
 
-The workspace consumes `survey-core` and `survey-creator-core` /
-`survey-creator-react` via local `file:` references in the root
-`package.json`, pointing at sibling checkouts:
+## How Sync Works
 
-```
-../survey-library/packages/survey-core/build
-../survey-creator/packages/survey-creator-core/build
-../survey-creator/packages/survey-creator-react/build
-```
+- The client listens to `creator.undoRedoController.undoRedoManager.onSerializedChanges`.
+- Each change (property update, array mutation, undo, redo) is serialized into an `ISyncMessage` and sent to the server.
+- The server applies the message to the session's in-memory `SurveyModel`, ensuring new clients receive the latest state.
+- The server then broadcasts the message to all other clients in the same session.
+- Each client applies incoming messages via `manager.applySerialized(message)`.
+- During application, local change listeners are temporarily disabled to prevent echoing remote updates back to the server.
 
-Those packages must be built first (`npm run build` in each repo) before
-`npm install` here will succeed.
-
-## Quick start
+## Running
 
 ```bash
 npm install
 npm run dev
 ```
 
-The server listens on `http://localhost:8080` and, in dev mode, hosts the
-React client through embedded Vite middleware on the same port. Open
-`http://localhost:8080/` in your browser:
+The application is available at [`http://localhost:8080`](http://localhost:8080). The server hosts the React client through embedded Vite middleware on the same port.
 
-1. The first tab auto-creates a new session and is redirected to
-   `http://localhost:8080/<sessionId>`.
-2. Click **Copy invite link** in the top bar and open it in another tab
-   (or share it). Both clients now edit the same survey live.
+Open the app to create a session, then copy the invite link to collaborate in another tab.
 
-A session id can also be supplied directly in the URL path
-(`/<sessionId>`) — the client will join that session instead of creating
-a new one.
+A session ID can also be supplied directly in the URL path (`/<sessionId>`)&mdash;the client will join that session instead of creating a new one.
 
-## Production build
+## Environment Variables
+
+| Variable | Default | Description  |
+| ---- | ---- | --- |
+| `PORT` | `8080` | HTTP + WebSocket port |
+| `NODE_ENV` | `development` | Enables production mode when set to `production` (disables Vite middleware) |
+| `CLIENT_DIST` | `packages/client/dist` | Directory containing the production client build |
+| `EMPTY_SESSION_TTL_MS` | `1800000` (30 min) | Time before an empty session is garbage-collected |
+
+## Production
 
 ```bash
-npm run build    # builds the server (tsc) and the client (vite build)
-npm run start    # builds, then runs the compiled server on $PORT (8080)
+npm run build
+npm start
 ```
 
-In production mode the server serves the static client bundle from
-`packages/client/dist` (override with `CLIENT_DIST`) and does not load
-Vite.
+`npm run build` compiles the server and builds the client application. `npm start` serves the production build on [`http://localhost:8080`](http://localhost:8080).
 
-## Environment variables
+In production mode the server serves the static client bundle from `packages/client/dist` (override with `CLIENT_DIST`) and does not load Vite.
 
-| Variable                | Default                | Description                                            |
-| ----------------------- | ---------------------- | ------------------------------------------------------ |
-| `PORT`                  | `8080`                 | HTTP + WebSocket port.                                 |
-| `NODE_ENV`              | `development`          | `production` disables the Vite dev middleware.         |
-| `CLIENT_DIST`           | `packages/client/dist` | Static assets directory served in production.          |
-| `EMPTY_SESSION_TTL_MS`  | `1800000` (30 min)     | How long an empty session lingers before GC.           |
+## API
 
-## HTTP / WebSocket API
+| Method | Path | Description           |
+| ------ | - | --- |
+| POST   | `/api/sessions`     | Create a session      |
+| GET    | `/api/sessions/:id` | Fetch session state   |
+| GET    | `/health`           | Health check          |
+| WS     | `/ws/sessions/:id`  | Collaboration channel |
 
-| Method | Path                       | Description                                                       |
-| ------ | -------------------------- | ----------------------------------------------------------------- |
-| POST   | `/api/sessions`            | Create a session. Body: `{ schema?: any }` → `{ sessionId }`.     |
-| GET    | `/api/sessions/:id`        | Returns `{ sessionId, schema }` for an existing session.          |
-| GET    | `/health`                  | Liveness check: `{ ok: true }`.                                   |
-| WS     | `/ws/sessions/:id`         | Join a session. Frames are JSON envelopes (see `protocol/`).      |
+## Project Structure
 
-## How sync works
-
-* The client subscribes to
-  `creator.undoRedoController.undoRedoManager.onSerializedChanges`.
-  Every transaction (each property change, array splice, undo, redo)
-  becomes one JSON `ISyncMessage` that is sent to the server.
-* The server applies the message to its in-memory `SurveyModel` for the
-  session (so late joiners get the up-to-date schema) and relays it to
-  all other clients in the session.
-* Each receiving client passes the message into
-  `manager.applySerialized(message)`, which mutates the creator's
-  `SurveyModel` while temporarily detaching the local change observer —
-  so remote ops do not echo back.
+- [`packages/protocol/index.d.ts`](packages/protocol/index.d.ts) &mdash; Shared wire protocol types
+- [`packages/server/src/index.ts`](packages/server/src/index.ts) &mdash; HTTP + WebSocket server
+- [`packages/client/src/CollaborativeCreator.tsx`](packages/client/src/CollaborativeCreator.tsx) &mdash; Survey Creator embedding and session handling
+- [`packages/client/src/collab-client.ts`](packages/client/src/collab-client.ts) &mdash; Client-side sync logic
 
 ## Limitations
 
-MVP only: in-memory sessions, no authentication, no persistence, no
-presence/cursors, no conflict resolution beyond last-write-wins ordering
-imposed by the server's relay.
+- In-memory sessions only
+- No authentication
+- No persistence
+- No presence or cursor tracking
+
+<!-- ## License -->
+
+## Related Resources
+
+- [Collaborative Form Filling by SurveyJS](https://github.com/surveyjs/collaborative-form-filling)
+- [SurveyJS Website](https://surveyjs.io/)
+- [SurveyJS Documentation](https://surveyjs.io/documentation)
+- [SurveyJS Creator Demos](https://surveyjs.io/survey-creator/examples/overview)
+- [What's New in SurveyJS](https://surveyjs.io/WhatsNew)
