@@ -6,12 +6,12 @@ import type {
 import { CollaborativeCreator } from "./CollaborativeCreator";
 
 const SAMPLE_SCHEMA = {
-    title: "New collaborative survey2",
+    title: "New Collaborative Survey",
     pages: [
         {
             name: "page1",
             elements: [
-                { type: "text", name: "question1", title: "Your first question" }
+                { type: "text", name: "question1" }
             ]
         }
     ]

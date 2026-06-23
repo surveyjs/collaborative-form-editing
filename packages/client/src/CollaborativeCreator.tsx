@@ -247,7 +247,7 @@ function ConnectionBar(props: {
             </span>
             {props.clientId && (
                 <span style={{ color: "#666" }}>
-                    you: <code>{props.clientId.slice(0, 8)}</code>
+                    Your ID: <code>{props.clientId.slice(0, 8)}</code>
                 </span>
             )}
             <span style={{ marginLeft: "auto" }}>
