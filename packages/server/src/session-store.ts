@@ -1,8 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { SurveyModel } from "survey-core";
+import { SurveyModel, slk } from "survey-core";
 import { UndoRedoManager } from "survey-creator-core";
 import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
 import type { ISessionSnapshot, ISyncMessage } from "@collab/shared";
+
+// Activate the SurveyJS commercial license for the headless server-side
+// SurveyModel instances. Must run before any survey is created.
+slk("ZG9tYWluczpzdXJ2ZXlqcy5pbyxzdXJ2ZXlqc25leHQsbG9jYWxob3N0OzE9MjAzNi0wMy0yNywyPTIwMzYtMDMtMjcsND0yMDM2LTAzLTI3LDg9MjAzNi0wMy0yNw==");
 
 export interface ISession {
     id: string;

@@ -1,9 +1,14 @@
 import React from "react";
 import ReactDOM from "react-dom";
+import { slk } from "survey-core";
 import { App } from "./App";
 
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
+
+// Activate the SurveyJS commercial license. Must run before any SurveyModel
+// or SurveyCreator is instantiated.
+slk("ZG9tYWluczpzdXJ2ZXlqcy5pbyxzdXJ2ZXlqc25leHQsbG9jYWxob3N0OzE9MjAzNi0wMy0yNywyPTIwMzYtMDMtMjcsND0yMDM2LTAzLTI3LDg9MjAzNi0wMy0yNw==");
 
 // Localization dictionaries for survey-core and survey-creator-core.
 // Importing these registers all bundled locales (ru, de, fr, etc.) with
