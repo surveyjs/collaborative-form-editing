@@ -1,6 +1,6 @@
 # Collaborative Form Editing by SurveyJS
 
-A real-time collaborative survey editing system built with [Survey Creator by SurveyJS](https://surveyjs.io/survey-creator/documentation/overview). Multiple users can edit the same survey simultaneously, similar to Google Docs for form design.
+A real-time collaborative survey editing system built with [Survey Creator by SurveyJS](https://surveyjs.io/survey-creator/documentation/overview). Multiple users can edit the same survey or form simultaneously, similar to Google Docs for document editing.
 
 - **Frontend** &ndash; React + SurveyJS Creator (`survey-core`, `survey-creator-core`, `survey-creator-react`)
 - **Backend** &ndash; Node.js + Express + WebSocket
