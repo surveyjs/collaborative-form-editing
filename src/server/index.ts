@@ -10,7 +10,7 @@ import type {
     IClientToServer,
     IServerToClient,
     ISyncMessage
-} from "@collab/shared";
+} from "survey-creator-core";
 import { applyMessage, createSession, deleteSession, getOrCreateSession, getSession, snapshot } from "./session-store.js";
 
 /** Custom (user-chosen) session ids: URL-safe, 1..128 chars. */
@@ -21,11 +21,15 @@ const PORT = Number(process.env.PORT ?? 8080);
 const EMPTY_SESSION_TTL_MS = Number(process.env.EMPTY_SESSION_TTL_MS ?? 30 * 60 * 1000);
 const IS_DEV = (process.env.NODE_ENV ?? "development") !== "production";
 
-// Static client assets (built by `npm -w @collab/client run build`).
+// Static client assets (built by `npm run build:client`).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CLIENT_ROOT = path.resolve(__dirname, "..", "..", "client");
+// __dirname is src/server in dev (tsx) and dist/server in prod; two levels up is
+// the project root in both cases — that's where index.html + vite.config.ts live
+// (the Vite root in dev) and where the client build lands (dist/client in prod).
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
+const CLIENT_ROOT = PROJECT_ROOT;
 const CLIENT_DIST = path.resolve(
-    process.env.CLIENT_DIST ?? path.join(CLIENT_ROOT, "dist")
+    process.env.CLIENT_DIST ?? path.join(PROJECT_ROOT, "dist", "client")
 );
 const CLIENT_DIST_EXISTS = !IS_DEV && fs.existsSync(path.join(CLIENT_DIST, "index.html"));
 
@@ -312,8 +316,12 @@ async function attachViteMiddleware(): Promise<void> {
         appType: "spa",
         server: {
             middlewareMode: true,
-            // HMR disabled: avoids extra WebSocket and reload loops in this setup.
-            hmr: false
+            // Run HMR over the main HTTP server instead of a separate port.
+            // `hmr: false` does not stop Vite from injecting `@vite/client`, which
+            // then polls an unreachable HMR port and reload-loops the page. Sharing
+            // our server gives it a stable same-origin socket; the `upgrade` handler
+            // above ignores non-/ws/sessions upgrades, leaving them for Vite's HMR.
+            hmr: { server: httpServer }
         }
     });
 

@@ -50,7 +50,7 @@ A session ID can also be supplied directly in the URL path (`/<sessionId>`)&mdas
 | ---- | ---- | --- |
 | `PORT` | `8080` | HTTP + WebSocket port |
 | `NODE_ENV` | `development` | Enables production mode when set to `production` (disables Vite middleware) |
-| `CLIENT_DIST` | `packages/client/dist` | Directory containing the production client build |
+| `CLIENT_DIST` | `dist/client` | Directory containing the production client build |
 | `EMPTY_SESSION_TTL_MS` | `1800000` (30 min) | Time before an empty session is garbage-collected |
 
 ## Production
@@ -62,7 +62,7 @@ npm start
 
 `npm run build` compiles the server and builds the client application. `npm start` serves the production build on [`http://localhost:8080`](http://localhost:8080).
 
-In production mode the server serves the static client bundle from `packages/client/dist` (override with `CLIENT_DIST`) and does not load Vite.
+In production mode the server serves the static client bundle from `dist/client` (override with `CLIENT_DIST`) and does not load Vite.
 
 ## API
 
@@ -75,10 +75,12 @@ In production mode the server serves the static client bundle from `packages/cli
 
 ## Project Structure
 
-- [`packages/protocol/index.d.ts`](packages/protocol/index.d.ts) &mdash; Shared wire protocol types
-- [`packages/server/src/index.ts`](packages/server/src/index.ts) &mdash; HTTP + WebSocket server
-- [`packages/client/src/CollaborativeCreator.tsx`](packages/client/src/CollaborativeCreator.tsx) &mdash; Survey Creator embedding and session handling
-- [`packages/client/src/collab-client.ts`](packages/client/src/collab-client.ts) &mdash; Client-side sync logic
+- [`src/server/index.ts`](src/server/index.ts) &mdash; HTTP + WebSocket server
+- [`src/server/session-store.ts`](src/server/session-store.ts) &mdash; In-memory session state and sync application
+- [`src/client/CollaborativeCreator.tsx`](src/client/CollaborativeCreator.tsx) &mdash; Survey Creator embedding and session handling
+- [`src/client/collab-client.ts`](src/client/collab-client.ts) &mdash; Client-side sync logic
+
+The shared wire-protocol types (`ISyncMessage`, `IClientToServer`, `IServerToClient`, …) are imported from `survey-creator-core`.
 
 ## Limitations
 

@@ -3,16 +3,15 @@
     "private": true,
     "version": "0.1.0",
     "description": "Collaborative editing service for SurveyJS Creator",
-    "workspaces": [
-        "packages/creator-undo-redo-sync",
-        "packages/protocol",
-        "packages/server",
-        "packages/client"
-    ],
+    "type": "module",
+    "main": "dist/server/index.js",
     "scripts": {
-        "dev": "npm -w @collab/server run dev",
-        "build": "npm -w @collab/creator-undo-redo-sync run build && npm -w @collab/server run build && npm -w @collab/client run build",
-        "start": "npm run build && npm -w @collab/server run start",
+        "dev": "tsx src/server/index.ts",
+        "build:server": "tsc -p tsconfig.server.json",
+        "build:client": "vite build",
+        "build": "npm run build:server && npm run build:client",
+        "start": "npm run build && node dist/server/index.js",
+        "typecheck": "tsc -p tsconfig.json",
         "test:e2e": "playwright test",
         "test:e2e:ui": "playwright test --ui"
     },

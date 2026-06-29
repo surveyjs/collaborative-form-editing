@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import type {
     ICreateSessionRequest,
     ICreateSessionResponse
-} from "@collab/shared";
+} from "survey-creator-core";
 import { CollaborativeCreator } from "./CollaborativeCreator";
 
 const SAMPLE_SCHEMA = {

@@ -1,11 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { surveyLocalization } from "survey-core";
 import { SurveyCreator, SurveyCreatorComponent } from "survey-creator-react";
-import { UndoRedoSyncPlugin } from "@collab/creator-undo-redo-sync";
-import type { ISyncMessage } from "@collab/shared";
+import { UndoRedoSyncPlugin } from "survey-creator-core";
+import type { ISyncMessage } from "survey-creator-core";
 import { CollabClient } from "./collab-client";
-import { planTranslationRefresh, applyTranslationRefresh } from "./translation-refresh";
-import { planLogicRefresh, applyLogicRefresh, bindLogicEditEndFlush } from "./logic-refresh";
 
 export interface ICollaborativeCreatorProps {
     sessionId: string;
@@ -34,15 +31,6 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
     // creator replaces its manager whenever it rebuilds the survey (e.g. on
     // `creator.JSON = ...`), so we recreate the plugin when it changes.
     const boundManagerRef = useRef<unknown>(null);
-    // A remote refresh that arrived while the Logic tab's detail editor was open
-    // was deferred; this remembers to rebuild once the user returns to the list.
-    const pendingLogicRebuildRef = useRef(false);
-    // The Logic model our deferred-rebuild flush is bound to, plus the unbind
-    // function for those bindings. The creator recreates the model whenever it
-    // rebuilds the survey (e.g. `creator.JSON = ...`), so we re-bind when it
-    // changes.
-    const logicWatchedModelRef = useRef<any>(null);
-    const logicUnbindRef = useRef<(() => void) | null>(null);
     const [conn, setConn] = useState<ConnState>("connecting");
     const [peerId, setPeerId] = useState<string | null>(null);
 
@@ -50,8 +38,10 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
         const wsUrl = buildWsUrl(props.sessionId);
 
         // (Re)bind the UndoRedoSyncPlugin to the creator's *current*
-        // UndoRedoManager. Outbound wire messages are forwarded to the
-        // server; inbound messages are fed back via `plugin.applySerialized`.
+        // UndoRedoManager. Outbound wire messages are forwarded to the server;
+        // inbound messages are fed back via `plugin.applySerialized`. The plugin
+        // also refreshes the Translation/Logic tab snapshot models itself (that
+        // logic lives in survey-creator-core now), so the client just applies.
         const ensureSyncPlugin = (): UndoRedoSyncPlugin | null => {
             const manager = creator.undoRedoManager;
             if (!manager) return pluginRef.current;
@@ -66,70 +56,6 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
             pluginRef.current = plugin;
             boundManagerRef.current = manager;
             return plugin;
-        };
-
-        // Remote edits mutate `creator.survey` in place. The Designer/Preview
-        // tabs are bound to it directly, but the Translations tab keeps its own
-        // snapshot model (a TranslationGroup tree + a `stringsSurvey` matrix)
-        // that is only rebuilt on activation. So while that tab is active we
-        // refresh it ourselves with the cheapest correct action (see
-        // `planTranslationRefresh` / `applyTranslationRefresh`): a structural
-        // change rebuilds; otherwise we re-read the snapshot data and register
-        // any not-yet-listed locale as an unchecked row (table columns unchanged).
-        const refreshTranslationTab = (message: ISyncMessage): void => {
-            if (creator.activeTab !== "translation") return;
-            const model = (creator.getPlugin("translation", false) as any)?.model;
-            if (!model) return;
-            const plan = planTranslationRefresh(message, {
-                visible: new Set<string>(model.getVisibleLocales?.() ?? []),
-                localeCodes: new Set<string>(surveyLocalization.getLocales())
-            });
-            applyTranslationRefresh(model, plan);
-        };
-
-        // The Logic tab, like Translations, keeps its own snapshot model
-        // (a list of logic rules built only on activation) that does not react
-        // to in-place survey mutations. We rebuild it ourselves while it is the
-        // active tab. The catch: the Logic tab edits ONE rule at a time in a
-        // modal detail editor and exposes only a full `model.update()` (no soft
-        // refresh). Rebuilding mid-edit would discard the user's unsaved rule,
-        // so while a rule is open (`mode !== "view"`) we DEFER the rebuild and
-        // flush it when the user LEAVES the editor — on Done (save) AND on Cancel
-        // (collapsing the panel). The model's `mode` is a plain getter, not a
-        // tracked survey property, so we cannot observe it directly; instead we
-        // hook both edit-end signals via `onLogicItemSaved` (save) and
-        // `bindLogicEditEndFlush` (the `mode -> "view"` transition, which covers
-        // cancel too). See logic-refresh.ts for why both are needed.
-        const refreshLogicTab = (message: ISyncMessage): void => {
-            if (creator.activeTab !== "logic") return;
-            const model = (creator.getPlugin("logic", false) as any)?.model;
-            if (!model) return;
-
-            // (Re)bind the flush to the current model. We only swap when the
-            // model instance itself changed (it is recreated on JSON reset).
-            if (logicWatchedModelRef.current !== model) {
-                logicUnbindRef.current?.();
-
-                // Idempotent: clears the pending flag, so a double-fire (save
-                // triggers both onLogicItemSaved and onEndEditing) is harmless.
-                const flush = (): void => {
-                    if (!pendingLogicRebuildRef.current) return;
-                    pendingLogicRebuildRef.current = false;
-                    model.update?.();
-                };
-
-                model.onLogicItemSaved?.add?.(flush);
-                const unbindEnd = bindLogicEditEndFlush(model, flush);
-                logicUnbindRef.current = (): void => {
-                    model.onLogicItemSaved?.remove?.(flush);
-                    unbindEnd();
-                };
-                logicWatchedModelRef.current = model;
-            }
-
-            const plan = planLogicRefresh(message, { isEditing: model.mode !== "view" });
-            const deferred = applyLogicRefresh(model, plan);
-            if (deferred) pendingLogicRebuildRef.current = true;
         };
 
         const client = new CollabClient(wsUrl, {
@@ -162,9 +88,9 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
                 const plugin = ensureSyncPlugin();
                 if (!plugin) return;
                 try {
+                    // applySerialized applies the change to the live survey AND
+                    // refreshes the active Translation/Logic tab if needed.
                     plugin.applySerialized(message);
-                    refreshTranslationTab(message);
-                    refreshLogicTab(message);
                 } catch (err) {
                     // eslint-disable-next-line no-console
                     console.warn("applySerialized failed", err);
@@ -179,10 +105,6 @@ export function CollaborativeCreator(props: ICollaborativeCreatorProps): JSX.Ele
             pluginRef.current?.dispose();
             pluginRef.current = null;
             boundManagerRef.current = null;
-            logicUnbindRef.current?.();
-            logicUnbindRef.current = null;
-            logicWatchedModelRef.current = null;
-            pendingLogicRebuildRef.current = false;
         };
     }, [creator, props.sessionId]);
 

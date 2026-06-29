@@ -3,7 +3,7 @@ import type {
     IServerToClient,
     ISyncMessage,
     ISyncStackSnapshot
-} from "@collab/shared";
+} from "survey-creator-core";
 
 export interface ICollabClientHandlers {
     onInit(schema: any, clientId: string, stack: ISyncStackSnapshot): void;
