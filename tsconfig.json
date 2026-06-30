@@ -15,7 +15,8 @@
         "noEmit": true
     },
     "include": [
-        "src/**/*",
+        "packages/frontend/**/*",
+        "packages/server-nodejs/**/*",
         "e2e/**/*.ts",
         "playwright.config.ts",
         "vite.config.ts"

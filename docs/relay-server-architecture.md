@@ -9,7 +9,7 @@ receives the current schema and the shared undo/redo stack).
 
 Today the server is **not a relay**. It holds an in-memory headless `SurveyModel` +
 `UndoRedoManager` and applies every message through `UndoRedoSyncPlugin.applySerialized()`
-([src/server/session-store.ts](../src/server/session-store.ts)). It does this
+([server-nodejs/session-store.ts](../packages/server-nodejs/session-store.ts)). It does this
 **only** to hand a late joiner the `schema` + `stack` in the `init` envelope. That logic depends on
 the survey-core runtime (`Serializer`, `LocalizableString`, `element.delete()`, property setters)
 and is therefore not portable to another language without reimplementing part of SurveyJS itself.
@@ -43,7 +43,7 @@ to the log → broadcasts it to the others; on a new connection → replays the 
 - **Late-join:** the joiner receives `init` with `seedSchema` and an empty stack, then the replayed
   `log` as ordinary `sync` messages. The client's `onInit` sets `creator.JSON = seedSchema` and
   `importStack(empty)`, then `onRemoteSync` applies each message via `applySerialized`
-  ([CollaborativeCreator.tsx](../src/client/CollaborativeCreator.tsx)). The result is the
+  ([CollaborativeCreator.tsx](../packages/frontend/CollaborativeCreator.tsx)). The result is the
   same state and an equivalent stack as the existing clients have.
 - **Undo/redo across the late-join boundary** is reproduced exactly: replaying `undo`/`redo`
   messages moves the cursor the same way it does for live clients. Replay is even more faithful than
@@ -115,7 +115,7 @@ configurable on the client and enable CORS on the server.
 ## Repository changes
 
 - The **new server** (any stack) implements the contract above — it replaces
-  [src/server](../src/server) or lives alongside it.
+  [server-nodejs](../packages/server-nodejs) or lives alongside it.
 - The server drops the `survey-core` and `survey-creator-core` (which now bundles the undo/redo
   sync plugin) dependencies and the `slk(...)` license call.
 - [packages/protocol](../packages/protocol) and the client package are **unchanged**.

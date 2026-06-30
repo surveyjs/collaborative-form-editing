@@ -1,0 +1,12 @@
+# .NET build artifacts
+bin/
+obj/
+
+# Publish output (see README for `dotnet publish -o`)
+publish/
+publish-*/
+
+# Rider / VS user files
+*.user
+.idea/
+.vs/

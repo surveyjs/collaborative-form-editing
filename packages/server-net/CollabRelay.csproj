@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Thin, byte-compatible WebSocket relay for the SurveyJS collaboration app.
+
+    Deliberately ZERO external NuGet packages: everything is built on the
+    BCL + ASP.NET Core shared framework (System.Net.WebSockets,
+    System.Text.Json, System.Threading.Channels). SignalR is intentionally
+    NOT used — its message framing/handshake is incompatible with the
+    browser's raw `new WebSocket(...)` client, which this relay must mirror
+    byte-for-byte.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Source-generated [GeneratedRegex] requires the analyzers on; they
+         ship with the SDK so this needs no package reference. -->
+    <RootNamespace>CollabRelay</RootNamespace>
+    <AssemblyName>CollabRelay</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+</Project>

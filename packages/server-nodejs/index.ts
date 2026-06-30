@@ -2,7 +2,6 @@ import http from "node:http";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
 import type {
     ICreateSessionRequest,
@@ -22,11 +21,13 @@ const EMPTY_SESSION_TTL_MS = Number(process.env.EMPTY_SESSION_TTL_MS ?? 30 * 60 
 const IS_DEV = (process.env.NODE_ENV ?? "development") !== "production";
 
 // Static client assets (built by `npm run build:client`).
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-// __dirname is src/server in dev (tsx) and dist/server in prod; two levels up is
-// the project root in both cases — that's where index.html + vite.config.ts live
-// (the Vite root in dev) and where the client build lands (dist/client in prod).
-const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
+// The server is always launched from the project root (npm runs scripts from the
+// package.json dir — `tsx server-nodejs/index.ts` in dev, `node dist/server/index.js`
+// in prod), so cwd is the project root: where index.html + vite.config.ts live (the
+// Vite root in dev) and where the client build lands (dist/client in prod). Using
+// cwd keeps this correct regardless of the server source/output directory depth
+// (server-nodejs is one level deep, the compiled dist/server is two).
+const PROJECT_ROOT = process.cwd();
 const CLIENT_ROOT = PROJECT_ROOT;
 const CLIENT_DIST = path.resolve(
     process.env.CLIENT_DIST ?? path.join(PROJECT_ROOT, "dist", "client")

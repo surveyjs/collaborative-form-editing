@@ -1,0 +1,7 @@
+# Compiled binaries
+/relay
+/relay.exe
+*.exe
+
+# Test / coverage output
+*.out
