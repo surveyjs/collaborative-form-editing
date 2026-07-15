@@ -1,0 +1,24 @@
+{
+    "name": "collab-client-vue",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "typecheck": "vue-tsc --noEmit"
+    },
+    "dependencies": {
+        "vue": "^3.4.19",
+        "survey-core": "../../../survey-library/packages/survey-core/build",
+        "survey-vue3-ui": "../../../survey-library/packages/survey-vue3-ui/build",
+        "survey-creator-core": "../../../survey-creator/packages/survey-creator-core/build",
+        "survey-creator-vue": "../../../survey-creator/packages/survey-creator-vue/build"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-vue": "^5.0.4",
+        "typescript": "^5.5.4",
+        "vite": "^5.4.2",
+        "vue-tsc": "^2.0.29"
+    }
+}

@@ -1,0 +1,26 @@
+{
+    "name": "collab-client-react",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "build": "vite build",
+        "typecheck": "tsc --noEmit"
+    },
+    "dependencies": {
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "survey-core": "../../../survey-library/packages/survey-core/build",
+        "survey-react-ui": "../../../survey-library/packages/survey-react-ui/build",
+        "survey-creator-core": "../../../survey-creator/packages/survey-creator-core/build",
+        "survey-creator-react": "../../../survey-creator/packages/survey-creator-react/build"
+    },
+    "devDependencies": {
+        "@types/react": "^18.3.3",
+        "@types/react-dom": "^18.3.0",
+        "@vitejs/plugin-react": "^4.3.1",
+        "typescript": "^5.5.4",
+        "vite": "^5.4.2"
+    }
+}

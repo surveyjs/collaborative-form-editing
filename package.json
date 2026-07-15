@@ -1,0 +1,36 @@
+{
+    "name": "survey-creator-collaboration-v2",
+    "private": true,
+    "version": "0.1.0",
+    "description": "Collaborative Survey Creator editing built on the journal plugin. The Node server is a reference implementation of the language-agnostic protocol (see PROTOCOL.md).",
+    "type": "module",
+    "scripts": {
+        "server": "tsx server/index.ts",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "install:clients": "npm --prefix lobby install && npm --prefix clients/react install && npm --prefix clients/vue install && npm --prefix clients/js install && npm --prefix clients/angular install",
+        "build:lobby": "npm --prefix lobby run build",
+        "build:react": "npm --prefix clients/react run build",
+        "build:vue": "npm --prefix clients/vue run build",
+        "build:js": "npm --prefix clients/js run build",
+        "build:angular": "npm --prefix clients/angular run build",
+        "build:clients": "npm run build:lobby && npm run build:react && npm run build:vue && npm run build:js && npm run build:angular",
+        "start": "npm run build:clients && npm run server",
+        "dev:lobby": "npm --prefix lobby run dev",
+        "dev:react": "npm --prefix clients/react run dev",
+        "dev:vue": "npm --prefix clients/vue run dev",
+        "dev:js": "npm --prefix clients/js run dev",
+        "dev:angular": "npm --prefix clients/angular run start",
+        "test:e2e": "playwright test",
+        "test:e2e:ui": "playwright test --ui"
+    },
+    "dependencies": {
+        "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "@playwright/test": "^1.51.0",
+        "@types/node": "^22.5.0",
+        "@types/ws": "^8.5.12",
+        "tsx": "^4.19.0",
+        "typescript": "^5.5.4"
+    }
+}
