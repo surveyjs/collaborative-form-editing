@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { PRESENCE_MAX_BYTES, PRESENCE_PALETTE, ROOM_ID_RE } from "./protocol.js";
+import { PRESENCE_MAX_BYTES, PRESENCE_NAME_MAX, PRESENCE_PALETTE, ROOM_ID_RE, truncateCodePoints } from "./protocol.js";
 import type { ClientToServer, ICreateRoomRequest, ServerToClient } from "./protocol.js";
 import { addClient, appendRecord, assignColorSlot, createRoom, getOrCreateRoom, getRoom, removeClient, setPresence } from "./room-store.js";
 import type { Room } from "./room-store.js";
@@ -218,7 +218,8 @@ httpServer.on("upgrade", (req, socket, head) => {
     }
     // Auto-create on first connect (seed {}) so pasted deep links just work.
     const room = getOrCreateRoom(roomId);
-    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, room));
+    const name = truncateCodePoints((url.searchParams.get("name") ?? "").trim(), PRESENCE_NAME_MAX) || "Guest";
+    wss.handleUpgrade(req, socket, head, (ws) => onConnection(ws, room, name));
 });
 
 function send(ws: WebSocket, msg: ServerToClient): void {
@@ -228,15 +229,18 @@ function send(ws: WebSocket, msg: ServerToClient): void {
 const colorOf = (room: Room, id: string): string =>
     PRESENCE_PALETTE[(room.colorSlots.get(id) ?? 0) % PRESENCE_PALETTE.length];
 
+const nameOf = (room: Room, id: string): string => room.names.get(id) ?? "Guest";
+
 // Presence rate limit: token bucket per connection.
 const PRESENCE_BUCKET_CAPACITY = 100;
 const PRESENCE_TOKENS_PER_SEC = 50;
 
-function onConnection(ws: WebSocket, room: Room): void {
+function onConnection(ws: WebSocket, room: Room, name: string): void {
     const clientId = randomUUID();
     addClient(room, clientId, ws);
     assignColorSlot(room, clientId);
-    console.log(`[room ${room.id}] + client ${clientId} (now ${room.clients.size})`);
+    room.names.set(clientId, name);
+    console.log(`[room ${room.id}] + client ${clientId} "${name}" (now ${room.clients.size})`);
 
     // Bootstrap: current seed + full log. Must precede any relayed record.
     send(ws, { type: "init", clientId, color: colorOf(room, clientId), seed: room.seed, log: room.log });
@@ -245,7 +249,7 @@ function onConnection(ws: WebSocket, room: Room): void {
     if (room.presence.size > 0) {
         send(ws, {
             type: "presence-sync",
-            peers: [...room.presence].map(([id, state]) => ({ clientId: id, color: colorOf(room, id), state }))
+            peers: [...room.presence].map(([id, state]) => ({ clientId: id, name: nameOf(room, id), color: colorOf(room, id), state }))
         });
     }
 
@@ -267,7 +271,10 @@ function onConnection(ws: WebSocket, room: Room): void {
             }
         } else if (msg.type === "presence" && msg.state != null) {
             // Guards: frame size cap + token bucket; excess is dropped silently.
-            if (data.toString().length > PRESENCE_MAX_BYTES) return;
+            // Count raw frame bytes — String#length is UTF-16 units and lets
+            // multi-byte frames (e.g. CJK) past the "bytes" cap.
+            const frameBytes = Array.isArray(data) ? data.reduce((n, b) => n + b.byteLength, 0) : data.byteLength;
+            if (frameBytes > PRESENCE_MAX_BYTES) return;
             const now = Date.now();
             tokens = Math.min(PRESENCE_BUCKET_CAPACITY, tokens + ((now - lastRefill) / 1000) * PRESENCE_TOKENS_PER_SEC);
             lastRefill = now;
@@ -275,7 +282,7 @@ function onConnection(ws: WebSocket, room: Room): void {
             tokens -= 1;
             // Latest state only, never in the log.
             setPresence(room, clientId, msg.state);
-            const peerEntry = { clientId, color: colorOf(room, clientId), state: msg.state };
+            const peerEntry = { clientId, name: nameOf(room, clientId), color: colorOf(room, clientId), state: msg.state };
             for (const [otherId, peer] of room.clients) {
                 if (otherId !== clientId) send(peer, { type: "presence", peer: peerEntry });
             }

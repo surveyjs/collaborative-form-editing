@@ -2,8 +2,7 @@
  * Tiny framework-agnostic connection bar shown above the Creator in every
  * client app. Pure DOM, zero imports — same sharing rules as collab-client.ts.
  */
-import type { CollabStatus } from "./collab-client";
-import { presenceInitials } from "./presence-types";
+import type { CollabStatus, IPresencePeerLike } from "./collab-client";
 
 export interface IParticipantInfo {
     id: string;
@@ -11,6 +10,16 @@ export interface IParticipantInfo {
     color: string;
     /** Creator tab the participant is on ("designer", "theme", …). */
     tab: string;
+}
+
+/** The connectCollab roster → setParticipants input, shared by every client app. */
+export function peersToParticipants(peers: ReadonlyMap<string, IPresencePeerLike>): IParticipantInfo[] {
+    return [...peers.values()].map((p) => ({
+        id: p.clientId,
+        name: p.name,
+        color: p.color,
+        tab: (p.state as { tab?: string } | undefined)?.tab ?? ""
+    }));
 }
 
 export interface IStatusBar {
@@ -102,4 +111,12 @@ export function initStatusBar(container: HTMLElement, framework: string, roomId:
 
 function escapeHtml(s: string): string {
     return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+}
+
+/** Local copy of survey-creator-core's presenceInitials (zero-imports rule). */
+function presenceInitials(name: string): string {
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return "?";
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }

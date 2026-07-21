@@ -6,13 +6,10 @@ import "survey-creator-core/survey-creator-core.css";
 import "survey-core/i18n";
 import "survey-creator-core/i18n";
 import { slk } from "survey-core";
-import { JournalPlugin, buildLocator, resolveLocator } from "survey-creator-core";
+import { JournalPlugin, PresencePlugin } from "survey-creator-core";
 import { SurveyCreator } from "survey-creator-js";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
-import { initPresenceCapture } from "../../../shared/presence-capture";
-import { initPresenceOverlay } from "../../../shared/presence-overlay";
-import type { IPresenceOverlay } from "../../../shared/presence-overlay";
-import { initStatusBar } from "../../../shared/status-bar";
+import { initStatusBar, peersToParticipants } from "../../../shared/status-bar";
 
 // Baked in at build time from the environment (see envPrefix in vite.config.ts).
 if (import.meta.env.SURVEYJS_LICENSE_KEY) slk(import.meta.env.SURVEYJS_LICENSE_KEY);
@@ -29,30 +26,19 @@ if (!roomId) {
 
     const plugin = new JournalPlugin(creator);
     creator.addPlugin("journal", plugin);
+    // Captures focus/selection/cursor and renders remote peers; the transport
+    // below only ships its opaque state (the server stamps name/color on it).
+    const presence = new PresencePlugin(creator);
+    creator.addPlugin("presence", presence);
 
     const bar = initStatusBar(document.getElementById("bar")!, "Plain JS", roomId);
 
-    // Locator functions come from THIS app's survey-creator-core copy — the
-    // shared presence modules must not import the library themselves.
-    const locator = {
-        build: (obj: unknown, survey: unknown): string => buildLocator(obj, survey as never),
-        resolve: (loc: string, survey: unknown): unknown => resolveLocator(loc, survey as never)
-    };
-
-    let overlay: IPresenceOverlay | undefined;
-    const collab = connectCollab({
-        creator, plugin, roomId,
+    connectCollab({
+        creator, plugin, presence, roomId,
         name: getDisplayName(),
         onStatus: (s) => bar.setStatus(s),
-        onPresence: (peers) => {
-            overlay?.refresh();
-            bar.setParticipants([...peers.values()].map((p) => ({
-                id: p.clientId, name: p.state.name, color: p.color, tab: p.state.tab
-            })));
-        }
+        onPresence: (peers) => bar.setParticipants(peersToParticipants(peers))
     });
-    initPresenceCapture({ creator, locator, send: (partial) => collab.updatePresence(partial) });
-    overlay = initPresenceOverlay({ creator, locator, getPeers: () => collab.getPeers() });
 
     creator.render(document.getElementById("creator")!);
 }

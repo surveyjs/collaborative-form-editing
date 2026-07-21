@@ -44,9 +44,11 @@ export interface IAppendMsg {
 /**
  * client → server: this client's FULL presence state (not a diff) — replaces
  * whatever the server stored for this client. Ephemeral: never enters the log.
- * Opaque to the server; the client-side shape is a UI convention (see
- * shared/presence-types.ts). Full-state messages make presence self-healing:
- * any single message fully re-establishes the participant.
+ * Opaque to the server; the client-side shape is a creator-side convention
+ * (survey-creator-core's PresencePlugin / IPresenceState). Full-state messages
+ * make presence self-healing: any single message fully re-establishes the
+ * participant. User identity is NOT in the state — the server stamps it onto
+ * the relayed envelope (see IPresencePeerEntry).
  */
 export interface IPresenceMsg {
     type: "presence";
@@ -95,9 +97,27 @@ export const PRESENCE_PALETTE: readonly string[] = [
 /** The server silently drops presence frames larger than this many bytes. */
 export const PRESENCE_MAX_BYTES = 4096;
 
+/**
+ * Maximum display-name length; the server trims longer names. Names come from
+ * the `?name=` query param of the WS connection URL (`/ws/rooms/:id?name=...`);
+ * a missing/empty name becomes "Guest".
+ */
+export const PRESENCE_NAME_MAX = 32;
+
+/**
+ * Truncate to at most `max` Unicode code points. String#slice counts UTF-16
+ * units and can cut a surrogate pair in half, leaving a lone surrogate that
+ * strict JSON decoders reject; every name trim (server and clients) uses this.
+ */
+export function truncateCodePoints(s: string, max: number): string {
+    return [...s].slice(0, max).join("");
+}
+
 /** One roster entry as the server knows it. `state` is opaque to the server. */
 export interface IPresencePeerEntry {
     clientId: string;
+    /** Display name from the connection URL's `?name=` param, sanitized by the server. */
+    name: string;
     /** Hex color from PRESENCE_PALETTE, server-assigned. */
     color: string;
     /** The last presence state this peer sent. */

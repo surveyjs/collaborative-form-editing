@@ -21,6 +21,10 @@ Creator edit ─► JournalPlugin.onRecordAdded/Changed ─► {type:"append", p
 server: room.log.push(payload) ─► broadcast {type:"record", from, payload} to other clients
 receiver: plugin.apply(payload)          (echo-suppressed, idempotent)
 late joiner: {type:"init", seed, log} ─► creator.JSON = seed; plugin.apply(log)
+
+focus change ─► PresencePlugin.onStateChanged ─► {type:"presence", state} ─► server
+server: wrap {clientId, name, color, state} ─► broadcast {type:"presence", peer} to others
+receiver: presence.upsertPeer(peer)      (the plugin renders the overlay itself)
 ```
 
 - **`PROTOCOL.md`** — the language-agnostic protocol specification. The Node server in
@@ -45,7 +49,11 @@ Sibling repos must be built at matching versions (currently `3.0.0-beta.8`):
 - `../survey-library/packages/{survey-core, survey-react-ui, survey-vue3-ui, survey-js-ui, survey-angular-ui}/build`
 - `../survey-creator/packages/{survey-creator-core, survey-creator-react, survey-creator-vue, survey-creator-js, survey-creator-angular}/build`
 
-The `survey-creator-core` build must include the journal plugin (`JournalPlugin` in the bundle).
+The `survey-creator-core` build must include the journal and presence plugins
+(`JournalPlugin` and `PresencePlugin` in the bundle). The presence plugin owns both
+sides of presence: capturing the local state (tab, selection, property-grid focus,
+cursor) and rendering remote peers; `collab-client.ts` only ships the opaque state
+and feeds server-stamped `{clientId, name, color, state}` envelopes back into it.
 
 ## Run
 

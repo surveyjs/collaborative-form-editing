@@ -84,11 +84,16 @@ Responses:
 
 `200 OK` — `{ "ok": true }`. Liveness probe.
 
-## WebSocket: `ws(s)://host/ws/rooms/{roomId}`
+## WebSocket: `ws(s)://host/ws/rooms/{roomId}?name={displayName}`
 
 One connection = one participant in one room. If the room does not exist when a client
 connects, the server MUST auto-create it with seed `{}` (this keeps pasted deep links
 working).
+
+`name` is the participant's display name (part of the presence extension). The server
+sanitizes it: trim, cut to 32 characters (`PRESENCE_NAME_MAX`), and substitute `"Guest"`
+when missing or empty. The server stamps the name onto every relayed presence envelope,
+so it never travels inside the presence state itself.
 
 All messages are single JSON objects (text frames). Unknown message types MUST be
 ignored (forward compatibility).
@@ -152,7 +157,12 @@ Principles:
 - Presence is **ephemeral**: it NEVER enters the room log. The server stores only
   the **latest** state per connected client and forgets it on disconnect.
 - Presence state is **opaque to the server** (like records). The state schema is a
-  client-side convention (see [`shared/presence-types.ts`](shared/presence-types.ts)).
+  creator-side convention: it is produced and consumed by survey-creator-core's
+  `PresencePlugin` (`IPresenceState`) — pure focus data (tab, selection, property-grid
+  focus, cursor), with no user identity inside.
+- **User identity lives in the envelope, not the state**: the server stamps
+  `clientId`, `name` (from the connection URL) and `color` (server-assigned) onto
+  every relayed peer entry.
 - Clients send their **full** state every time (not diffs) — any single message
   fully re-establishes a participant, which makes reconnects self-healing.
 
@@ -167,7 +177,7 @@ presence message, so clients never need the palette to render others.
 ### Client → server: `presence`
 
 ```json
-{ "type": "presence", "state": { "name": "Maria", "tab": "designer", "...": "opaque" } }
+{ "type": "presence", "state": { "tab": "designer", "sel": { "...": "..." }, "...": "opaque" } }
 ```
 
 The server MUST: replace the stored state for this client, and broadcast it to all
@@ -179,7 +189,7 @@ per client (token bucket, burst 100).
 ### Server → other clients: `presence`
 
 ```json
-{ "type": "presence", "peer": { "clientId": "3f2c8b9e-...", "color": "#e51a5f", "state": { "...": "opaque" } } }
+{ "type": "presence", "peer": { "clientId": "3f2c8b9e-...", "name": "Maria", "color": "#e51a5f", "state": { "...": "opaque" } } }
 ```
 
 ### Server → newcomer: `presence-sync` (immediately after `init`)
@@ -189,7 +199,7 @@ roster on the same connection, right after `init` (ordering is guaranteed by the
 socket):
 
 ```json
-{ "type": "presence-sync", "peers": [ { "clientId": "...", "color": "#0b7bd0", "state": { } } ] }
+{ "type": "presence-sync", "peers": [ { "clientId": "...", "name": "Bob", "color": "#0b7bd0", "state": { } } ] }
 ```
 
 ### Server → remaining clients: `presence-leave` (on disconnect)

@@ -1,25 +1,35 @@
 /**
- * Framework-agnostic collaboration wiring: JournalPlugin ↔ WebSocket.
+ * Framework-agnostic collaboration wiring: JournalPlugin + PresencePlugin ↔
+ * WebSocket.
  *
  * This module has ZERO runtime imports on purpose. It is compiled
  * independently by four differently-built client apps (Vite×3 + Angular CLI);
  * importing "survey-creator-core" from here would resolve to a *second* copy
  * of the library and break survey-core's Serializer singleton. Instead the
- * caller creates the creator and the JournalPlugin from ITS OWN dependency
- * copy and injects them (structural typing below). Type-only imports from
- * sibling shared files are fine — they are erased at compile time.
+ * caller creates the creator and the plugins from ITS OWN dependency copy and
+ * injects them (structural typing below). Type-only imports are fine — they
+ * are erased at build.
  *
  * Usage (identical in every client):
  *   const creator = new SurveyCreator(...);            // framework-specific
  *   const plugin = new JournalPlugin(creator);
  *   creator.addPlugin("journal", plugin);
- *   const collab = connectCollab({ creator, plugin, roomId });
+ *   const presence = new PresencePlugin(creator);
+ *   creator.addPlugin("presence", presence);
+ *   const collab = connectCollab({ creator, plugin, presence, roomId });
+ *
+ * Presence responsibilities are split: the PresencePlugin determines the
+ * state (focus/selection/cursor) and renders remote peers; this module only
+ * moves the opaque state over the wire (throttle, heartbeat, staleness) and
+ * routes the server's user-stamped envelopes ({clientId, name, color, state})
+ * into the plugin's roster.
  */
-import type { IPresenceState } from "./presence-types";
+import type { IPresencePeerEntry } from "../server/protocol";
 
 /** Structural mirror of survey-creator-core's EventBase — only what we use. */
 export interface IJournalEvent {
     add(handler: (sender: unknown, options: { record: unknown }) => void): void;
+    remove(handler: (sender: unknown, options: { record: unknown }) => void): void;
 }
 
 /** Structural mirror of the JournalPlugin surface we use. */
@@ -29,6 +39,25 @@ export interface IJournalPluginLike {
     apply(input: unknown): unknown;
 }
 
+export interface IPresenceEvent {
+    add(handler: (sender: unknown, options: unknown) => void): void;
+    remove(handler: (sender: unknown, options: unknown) => void): void;
+}
+
+/** Structural mirror of the PresencePlugin surface we use. */
+export interface IPresencePluginLike {
+    onStateChanged: IPresenceEvent;
+    /** Fires on every roster mutation (setPeers/upsertPeer/removePeer/clearPeers/dropStalePeers). */
+    onPeersChanged: IPresenceEvent;
+    getState(): unknown;
+    readonly peers: ReadonlyMap<string, IPresencePeerLike>;
+    setPeers(entries: IPresencePeerEntry[]): void;
+    upsertPeer(entry: IPresencePeerEntry): void;
+    removePeer(clientId: string): void;
+    clearPeers(): void;
+    dropStalePeers(olderThanMs: number): void;
+}
+
 /** Structural mirror of the creator — we only set its survey JSON. */
 export interface ICreatorLike {
     JSON: unknown;
@@ -36,38 +65,31 @@ export interface ICreatorLike {
 
 export type CollabStatus = "connecting" | "connected" | "closed";
 
-/** A remote participant as seen through the presence channel. */
-export interface IPresencePeer {
-    clientId: string;
-    /** Server-assigned hex color. */
-    color: string;
-    state: IPresenceState;
-    /** Local receive time (ms) of the last update — used for staleness. */
+/** A remote participant as stored in the PresencePlugin roster. */
+export interface IPresencePeerLike extends IPresencePeerEntry {
+    /** Local receive time (ms) of the last update. */
     lastSeen: number;
 }
 
 export interface ICollabOptions {
     creator: ICreatorLike;
     plugin: IJournalPluginLike;
+    presence: IPresencePluginLike;
     roomId: string;
     /** Override the WS origin, e.g. "ws://localhost:8080". Default: same origin. */
     wsBase?: string;
     onStatus?: (status: CollabStatus) => void;
-    /** Display name announced in presence. Default: getDisplayName(). */
+    /**
+     * Display name sent to the server in the connection URL (?name=); the
+     * server stamps it onto every relayed peer envelope. Default: getDisplayName().
+     */
     name?: string;
     /** The peer roster changed (join/update/leave). Excludes self. */
-    onPresence?: (peers: ReadonlyMap<string, IPresencePeer>) => void;
+    onPresence?: (peers: ReadonlyMap<string, IPresencePeerLike>) => void;
 }
 
 export interface ICollabConnection {
     dispose(): void;
-    /** Server-assigned identity; null until `init` arrives. */
-    readonly clientId: string | null;
-    /** This client's presence color; null until `init` arrives. */
-    readonly color: string | null;
-    /** Merge fields into the local presence state and send (throttled). */
-    updatePresence(partial: Partial<IPresenceState>): void;
-    getPeers(): ReadonlyMap<string, IPresencePeer>;
 }
 
 /** Outgoing presence is coalesced to at most one message per this interval. */
@@ -78,22 +100,18 @@ const PRESENCE_HEARTBEAT_MS = 15_000;
 const PRESENCE_STALE_MS = 45_000;
 
 export function connectCollab(opts: ICollabOptions): ICollabConnection {
-    const { creator, plugin, roomId } = opts;
+    const { creator, plugin, presence, roomId } = opts;
     const proto = location.protocol === "https:" ? "wss:" : "ws:";
     const base = opts.wsBase ?? `${proto}//${location.host}`;
-    const ws = new WebSocket(`${base}/ws/rooms/${encodeURIComponent(roomId)}`);
+    const name = opts.name ?? getDisplayName();
+    const ws = new WebSocket(`${base}/ws/rooms/${encodeURIComponent(roomId)}?name=${encodeURIComponent(name)}`);
     opts.onStatus?.("connecting");
 
     // Gate outgoing records until the init bootstrap has been applied.
     let ready = false;
 
-    // --- presence: own state -------------------------------------------------
+    // --- presence: own state (owned by the plugin, only shipped from here) ----
     let clientId: string | null = null;
-    let color: string | null = null;
-    const selfState: IPresenceState = {
-        name: opts.name ?? getDisplayName(),
-        tab: "", tabId: "", sel: null, pgFocus: null, cur: null
-    };
 
     let lastSentAt = 0;
     let sendTimer: ReturnType<typeof setTimeout> | undefined;
@@ -101,7 +119,7 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
         sendTimer = undefined;
         if (!ready || ws.readyState !== WebSocket.OPEN) return;
         lastSentAt = Date.now();
-        ws.send(JSON.stringify({ type: "presence", state: selfState }));
+        ws.send(JSON.stringify({ type: "presence", state: presence.getState() }));
     };
     const schedulePresenceSend = (): void => {
         if (sendTimer !== undefined) return;
@@ -109,32 +127,21 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
         if (elapsed >= PRESENCE_SEND_MS) sendPresenceNow();
         else sendTimer = setTimeout(sendPresenceNow, PRESENCE_SEND_MS - elapsed);
     };
+    const stateChanged = (): void => schedulePresenceSend();
+    presence.onStateChanged.add(stateChanged);
 
-    // --- presence: peers ------------------------------------------------------
-    const peers = new Map<string, IPresencePeer>();
-    const notifyPeers = (): void => opts.onPresence?.(peers);
-    const upsertPeer = (entry: { clientId: string; color: string; state: unknown }): void => {
-        if (!entry || entry.clientId === clientId || !entry.state) return;
-        peers.set(entry.clientId, {
-            clientId: entry.clientId,
-            color: entry.color,
-            state: entry.state as IPresenceState,
-            lastSeen: Date.now()
-        });
-    };
+    // --- presence: peers (roster lives in the plugin) --------------------------
+    // The plugin fires onPeersChanged on every roster mutation — that single
+    // subscription is the caller's notification path; no manual bookkeeping.
+    const peersChanged = (): void => opts.onPresence?.(presence.peers);
+    presence.onPeersChanged.add(peersChanged);
+    const isPeerEntry = (entry: IPresencePeerEntry | undefined): entry is IPresencePeerEntry =>
+        !!entry && entry.clientId !== clientId && !!entry.state;
 
     const heartbeat = setInterval(() => {
         schedulePresenceSend();
         // Staleness backstop for a server that missed a close.
-        let dropped = false;
-        const cutoff = Date.now() - PRESENCE_STALE_MS;
-        for (const [id, peer] of peers) {
-            if (peer.lastSeen < cutoff) {
-                peers.delete(id);
-                dropped = true;
-            }
-        }
-        if (dropped) notifyPeers();
+        presence.dropStalePeers(PRESENCE_STALE_MS);
     }, PRESENCE_HEARTBEAT_MS);
 
     ws.addEventListener("message", (ev) => {
@@ -147,9 +154,8 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
         if (!msg || typeof msg !== "object") return;
         if (msg.type === "init") {
             clientId = typeof msg.clientId === "string" ? msg.clientId : null;
-            color = typeof msg.color === "string" ? msg.color : null;
             // Fresh socket → fresh roster; a presence-sync follows on this socket.
-            peers.clear();
+            presence.clearPeers();
             // Bootstrap order matters: seed does NOT produce journal records,
             // then the log replays in server order (apply() suppresses echo).
             creator.JSON = msg.seed ?? {};
@@ -161,14 +167,12 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
         } else if (msg.type === "record") {
             plugin.apply(msg.payload);
         } else if (msg.type === "presence-sync") {
-            peers.clear();
-            if (Array.isArray(msg.peers)) for (const p of msg.peers) upsertPeer(p);
-            notifyPeers();
+            const peers = Array.isArray(msg.peers) ? (msg.peers as IPresencePeerEntry[]).filter(isPeerEntry) : [];
+            presence.setPeers(peers);
         } else if (msg.type === "presence") {
-            upsertPeer(msg.peer);
-            notifyPeers();
+            if (isPeerEntry(msg.peer)) presence.upsertPeer(msg.peer);
         } else if (msg.type === "presence-leave") {
-            if (peers.delete(msg.clientId)) notifyPeers();
+            presence.removePeer(msg.clientId);
         }
     });
 
@@ -182,33 +186,28 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
     // it as a new log entry and replay converges (last write wins).
     plugin.onRecordChanged.add(sendRecord);
 
-    ws.addEventListener("close", () => {
+    // The plugins outlive the socket — unhook every handler or each reconnect
+    // stacks another dead closure retaining the old WebSocket.
+    let disposed = false;
+    const cleanup = (): void => {
+        if (disposed) return;
+        disposed = true;
         clearInterval(heartbeat);
         if (sendTimer !== undefined) clearTimeout(sendTimer);
-        // No frozen cursors: the roster dies with the connection.
-        if (peers.size > 0) {
-            peers.clear();
-            notifyPeers();
-        }
+        // No frozen cursors: the roster dies with the connection. Clear BEFORE
+        // detaching so the caller still hears the final empty roster.
+        presence.clearPeers();
+        presence.onStateChanged.remove(stateChanged);
+        presence.onPeersChanged.remove(peersChanged);
+        plugin.onRecordAdded.remove(sendRecord);
+        plugin.onRecordChanged.remove(sendRecord);
         opts.onStatus?.("closed");
-    });
+    };
+    ws.addEventListener("close", cleanup);
 
     return {
-        get clientId(): string | null { return clientId; },
-        get color(): string | null { return color; },
-        updatePresence(partial: Partial<IPresenceState>): void {
-            // Shallow merge; sub-objects (sel/pgFocus/cur) are replaced wholesale.
-            for (const key of Object.keys(partial) as (keyof IPresenceState)[]) {
-                if (partial[key] !== undefined) (selfState as any)[key] = partial[key];
-            }
-            schedulePresenceSend();
-        },
-        getPeers(): ReadonlyMap<string, IPresencePeer> {
-            return peers;
-        },
         dispose(): void {
-            clearInterval(heartbeat);
-            if (sendTimer !== undefined) clearTimeout(sendTimer);
+            cleanup();
             if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) ws.close();
         }
     };
@@ -219,16 +218,21 @@ export function getRoomIdFromUrl(): string | null {
     return new URLSearchParams(location.search).get("room");
 }
 
+/** Local copy of protocol.ts's truncateCodePoints (zero-runtime-imports rule).
+ * String#slice counts UTF-16 units and can leave a lone surrogate that makes
+ * encodeURIComponent throw on every subsequent connect. */
+const truncateName = (s: string): string => [...s].slice(0, 32).join("");
+
 /**
  * Display name for presence: ?name= param (set by the lobby; needed in dev
  * where lobby and clients run on different origins) → localStorage → a
  * generated guest name. Whatever wins is persisted for the next visit.
  */
 export function getDisplayName(): string {
-    const fromUrl = (new URLSearchParams(location.search).get("name") ?? "").trim().slice(0, 32);
+    const fromUrl = truncateName((new URLSearchParams(location.search).get("name") ?? "").trim());
     let name = fromUrl;
     try {
-        if (!name) name = (localStorage.getItem("collab.name") ?? "").trim().slice(0, 32);
+        if (!name) name = truncateName((localStorage.getItem("collab.name") ?? "").trim());
         if (!name) name = `Guest-${Math.random().toString(36).slice(2, 6)}`;
         localStorage.setItem("collab.name", name);
     } catch {

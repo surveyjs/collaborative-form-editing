@@ -149,7 +149,9 @@ lobby.onComplete.add(async (sender) => {
     // Presence display name: persist for next time and pass via URL — in dev
     // the lobby and the clients run on different origins, so localStorage
     // alone wouldn't reach them.
-    const name = ((sender.getValue("name") as string) ?? "").trim().slice(0, 32);
+    // Slice by code points, not UTF-16 units — a halved surrogate pair here
+    // would poison localStorage and the ?name= param for every future visit.
+    const name = [...((sender.getValue("name") as string) ?? "").trim()].slice(0, 32).join("");
     if (name) {
         try {
             localStorage.setItem("collab.name", name);

@@ -19,6 +19,8 @@ export interface Room {
     clients: Map<string, WebSocket>;
     /** clientId → presence color slot, for everyone currently in the room. */
     colorSlots: Map<string, number>;
+    /** clientId → display name (from the connection URL), for everyone currently in the room. */
+    names: Map<string, string>;
     /** clientId → last presence state (opaque), only for clients that sent one. */
     presence: Map<string, unknown>;
     gcTimer?: NodeJS.Timeout;
@@ -34,7 +36,7 @@ export function getRoom(id: string): Room | undefined {
 }
 
 export function createRoom(id: string, seed: unknown = {}): Room {
-    const room: Room = { id, seed, log: [], clients: new Map(), colorSlots: new Map(), presence: new Map() };
+    const room: Room = { id, seed, log: [], clients: new Map(), colorSlots: new Map(), names: new Map(), presence: new Map() };
     rooms.set(id, room);
     return room;
 }
@@ -73,6 +75,7 @@ export function setPresence(room: Room, clientId: string, state: unknown): void 
 export function removeClient(room: Room, clientId: string): void {
     room.clients.delete(clientId);
     room.colorSlots.delete(clientId);
+    room.names.delete(clientId);
     room.presence.delete(clientId);
     if (room.clients.size === 0) {
         room.gcTimer = setTimeout(() => {

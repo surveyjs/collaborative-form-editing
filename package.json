@@ -1,5 +1,5 @@
 {
-    "name": "survey-creator-collaboration-v2",
+    "name": "survey-creator-collaboration",
     "private": true,
     "version": "0.1.0",
     "description": "Collaborative Survey Creator editing built on the journal plugin. The Node server is a reference implementation of the language-agnostic protocol (see PROTOCOL.md).",
