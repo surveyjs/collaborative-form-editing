@@ -95,7 +95,7 @@ Protocol-level unit coverage lives with the plugin itself
 | `PORT` | `8080` | HTTP/WS port |
 | `HOST` | `localhost` | Bind address |
 | `EMPTY_ROOM_TTL_MS` | `1800000` (30 min) | How long an empty room lives before GC |
-| `SURVEYJS_LICENSE_KEY` | — | SurveyJS Creator license key, baked into the client bundles **at build time** (`npm run build:clients` / `npm start`). Pass it via docker compose `environment:`; Vite clients pick it up through `envPrefix`, the Angular client through `scripts/gen-license-key.mjs` (npm pre-hook). |
+| `SURVEYJS_LICENSE_KEY` | — | SurveyJS Creator license key, baked into the client bundles **at build time** (`npm run build:clients` / `npm start`). Set it either in a `.env` file at the repo root (copy `.env.example`; gitignored) or via docker compose `environment:` — a real environment variable wins over `.env`. Vite clients read `.env` through `envDir`/`envPrefix`, the Angular client through `scripts/gen-license-key.mjs` (npm pre-hook). |
 
 ## Notes & caveats
 

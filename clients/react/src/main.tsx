@@ -1,10 +1,9 @@
 /// <reference types="vite/client" />
 import { createRoot } from "react-dom/client";
 import { slk } from "survey-core";
-import { JournalPlugin, PresencePlugin } from "survey-creator-core";
+import { CollabBarPlugin, JournalPlugin, PresencePlugin } from "survey-creator-core";
 import { SurveyCreator, SurveyCreatorComponent } from "survey-creator-react";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
-import { initStatusBar, peersToParticipants } from "../../../shared/status-bar";
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 // Localization dictionaries: importing registers all bundled locales (ru, de,
@@ -32,16 +31,21 @@ if (!roomId) {
     const presence = new PresencePlugin(creator);
     creator.addPlugin("presence", presence);
 
-    const bar = initStatusBar(document.getElementById("bar")!, "React", roomId, {
-        onSaveVersion: (label) => plugin.snapshot(label),
-        onGoToParticipant: (user) => { if (user.tab) creator.activeTab = user.tab; }
+    // The collaboration bar renders itself inside the creator root (above the
+    // tabs); participants flow in via the PresencePlugin. Host-specific bits —
+    // the lobby invite link and navigation — are plugin options.
+    const bar = new CollabBarPlugin(creator, {
+        roomId,
+        framework: "React",
+        getInviteLink: () => `${location.origin}/?room=${encodeURIComponent(roomId)}`,
+        onBack: () => { location.href = "/"; }
     });
+    creator.addPlugin("collabBar", bar);
 
     connectCollab({
         creator, plugin, presence, roomId,
         name: getDisplayName(),
         onStatus: (s) => bar.setStatus(s),
-        onPresence: (peers) => bar.setParticipants(peersToParticipants(peers)),
         onHistoryChanged: (changes) => bar.setHistory(changes)
     });
 

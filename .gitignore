@@ -5,4 +5,5 @@ playwright-report/
 *.log
 .angular/
 clients/angular/src/license-key.ts
+.env
 package-lock.json

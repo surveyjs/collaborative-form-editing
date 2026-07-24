@@ -7,6 +7,8 @@ export default defineConfig({
     // Expose SURVEYJS_* env vars (e.g. SURVEYJS_LICENSE_KEY from docker compose)
     // to the bundle via import.meta.env at BUILD time.
     envPrefix: ["VITE_", "SURVEYJS_"],
+    // Single shared .env at the repo root serves all clients.
+    envDir: "../..",
     resolve: {
         // file:-installed survey packages arrive via junctions; keep a single
         // survey-core instance or its Serializer singleton breaks.
