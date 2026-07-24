@@ -32,13 +32,17 @@ if (!roomId) {
     const presence = new PresencePlugin(creator);
     creator.addPlugin("presence", presence);
 
-    const bar = initStatusBar(document.getElementById("bar")!, "Vue 3", roomId);
+    const bar = initStatusBar(document.getElementById("bar")!, "Vue 3", roomId, {
+        onSaveVersion: (label) => plugin.snapshot(label),
+        onGoToParticipant: (user) => { if (user.tab) creator.activeTab = user.tab; }
+    });
 
     connectCollab({
         creator, plugin, presence, roomId,
         name: getDisplayName(),
         onStatus: (s) => bar.setStatus(s),
-        onPresence: (peers) => bar.setParticipants(peersToParticipants(peers))
+        onPresence: (peers) => bar.setParticipants(peersToParticipants(peers)),
+        onHistoryChanged: (changes) => bar.setHistory(changes)
     });
 
     createApp({ render: () => h(SurveyCreatorComponent, { model: creator }) }).mount("#root");

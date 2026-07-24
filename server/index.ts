@@ -202,6 +202,24 @@ const httpServer = http.createServer(requestHandler);
 // its own much tighter PRESENCE_MAX_BYTES check.
 const wss = new WebSocketServer({ noServer: true, maxPayload: 5 * 1024 * 1024 });
 
+// WS-level keepalive. A browser answers a protocol ping with a pong at the
+// WebSocket layer — no JS involved — so it keeps responding even in a throttled
+// or backgrounded tab where app-level (setInterval) heartbeats stall. This is
+// the authoritative liveness check: a connection that misses a ping/pong
+// round-trip is terminated, firing its close handler and the presence-leave
+// broadcast. It also keeps otherwise-idle connections warm through proxies.
+const PING_INTERVAL_MS = Number(process.env.PRESENCE_PING_MS ?? 30_000);
+type KeepAliveWS = WebSocket & { isAlive?: boolean };
+const keepAlive = setInterval(() => {
+    for (const client of wss.clients) {
+        const ka = client as KeepAliveWS;
+        if (ka.isAlive === false) { ka.terminate(); continue; }
+        ka.isAlive = false;
+        ka.ping();
+    }
+}, PING_INTERVAL_MS);
+wss.on("close", () => clearInterval(keepAlive));
+
 httpServer.on("upgrade", (req, socket, head) => {
     const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
     const m = /^\/ws\/rooms\/([^/]+)$/.exec(url.pathname);
@@ -241,6 +259,12 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
     assignColorSlot(room, clientId);
     room.names.set(clientId, name);
     console.log(`[room ${room.id}] + client ${clientId} "${name}" (now ${room.clients.size})`);
+
+    // Keepalive bookkeeping: every pong marks the socket alive; the server-wide
+    // interval above pings and terminates any socket that stopped answering.
+    const ka = ws as KeepAliveWS;
+    ka.isAlive = true;
+    ws.on("pong", () => { ka.isAlive = true; });
 
     // Bootstrap: current seed + full log. Must precede any relayed record.
     send(ws, { type: "init", clientId, color: colorOf(room, clientId), seed: room.seed, log: room.log });

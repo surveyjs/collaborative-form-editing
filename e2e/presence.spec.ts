@@ -215,7 +215,7 @@ async function openRoomAs(page: Page, roomId: string, name: string): Promise<voi
 }
 
 test.describe("presence UI", () => {
-    test("participant chips, selection outline, tab badge and remote cursor", async ({ page, context }) => {
+    test("participant chips, selection outline, tab state and remote cursor", async ({ page, context }) => {
         const roomId = uniqueRoomId("pres-ui");
         await createRoom(page, roomId, {
             pages: [{ name: "p1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
@@ -240,12 +240,26 @@ test.describe("presence UI", () => {
             expect(await ringShowsPeerColor(aliceRing)).toBe(true);
         }).toPass({ timeout: 10_000 });
 
+        // ...with Bob's name badge under the ring's bottom-right corner: it
+        // hangs 4px below the ring's outer edge (node rect + 2px box-shadow),
+        // right edge 8px inside the ring's right edge.
+        const aliceBadge = alice.locator(".collab-presence-badge", { hasText: "Bob" });
+        await expect(aliceBadge).toBeVisible();
+        await expect(async () => {
+            const ring = (await aliceRing.boundingBox())!;
+            const badge = (await aliceBadge.boundingBox())!;
+            expect(Math.abs(badge.x + badge.width - (ring.x + ring.width - 6))).toBeLessThanOrEqual(3);
+            expect(Math.abs(badge.y - (ring.y + ring.height + 6))).toBeLessThanOrEqual(3);
+        }).toPass({ timeout: 10_000 });
+
         // Local priority: Alice selects q1 herself → her native selection ring
-        // wins, Bob's colored ring is suppressed on that node.
+        // wins, Bob's colored ring is suppressed on that node - but the badge
+        // stays: Alice still sees who else is on the element.
         await questionLocator(alice, "q1").click();
         await expect(async () => {
             expect(await ringShowsPeerColor(aliceRing)).toBe(false);
         }).toPass({ timeout: 10_000 });
+        await expect(aliceBadge).toBeVisible();
 
         // Bob moves his mouse over q1 → Alice sees his labeled cursor.
         const box = (await questionLocator(bob, "q1").boundingBox())!;
@@ -253,17 +267,85 @@ test.describe("presence UI", () => {
         await bob.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
         await expect(alice.locator(".collab-presence-cursor-name", { hasText: "Bob" })).toBeVisible();
 
-        // Bob switches to the Preview tab → Alice's badge for Bob reflects it
-        // and his ring on the designer dims to the "away" state.
+        // Bob switches to the Preview tab → Alice's chip for Bob reflects it in
+        // its tooltip and his ring on the designer dims to the "away" state.
         await bob.locator("#tab-test, #tab-preview").first().click();
-        await expect(alice.locator(".collab-presence-badge")).toHaveAttribute("title", /Bob — (test|preview)/);
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toHaveAttribute("title", /Bob — (test|preview)/);
         await expect(aliceRing).toHaveAttribute("data-collab-focus", "away");
+        // The badge dims with the ring instead of disappearing.
+        await expect(aliceBadge).toHaveCSS("opacity", "0.5");
 
         // Bob leaves → all of Bob's artifacts disappear on Alice's side.
         await bob.close();
         await expect(alice.locator(".collab-participant-chip")).toHaveCount(0);
         await expect(alice.locator("[data-collab-focus]")).toHaveCount(0);
+        await expect(alice.locator(".collab-presence-badge")).toHaveCount(0);
         await expect(alice.locator(".collab-presence-cursor")).toBeHidden();
+    });
+
+    test("participant chips are not rebuilt on presence ticks that don't change the roster", async ({ page, context }) => {
+        const roomId = uniqueRoomId("pres-norebuild");
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
+        });
+
+        const alice = page;
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await openRoomAs(bob, roomId, "Bob");
+
+        const chip = alice.locator('.collab-participant-chip[title*="Bob"]');
+        await expect(chip).toBeVisible();
+        // Tag the current chip node; a full rebuild (replaceChildren) would drop it.
+        await chip.evaluate((el) => el.setAttribute("data-persist-check", "1"));
+
+        // Bob generates a stream of presence updates whose roster fields
+        // (name/color/tab) never change: a selection then cursor moves.
+        await questionLocator(bob, "q1").click();
+        const box = (await questionLocator(bob, "q1").boundingBox())!;
+        await bob.mouse.move(box.x + box.width / 3, box.y + box.height / 2);
+        await bob.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 8 });
+        // Proof the updates actually reached Alice (so setParticipants ran).
+        await expect(alice.locator(".collab-presence-cursor-name", { hasText: "Bob" })).toBeVisible();
+
+        // The chip node survived: no rebuild happened for a roster that didn't change.
+        await expect(alice.locator('.collab-participant-chip[data-persist-check="1"]')).toHaveCount(1);
+
+        // A real roster change (Bob switches tab) DOES refresh the chip: its
+        // title reflects the new tab and the stale tagged node is gone.
+        await bob.locator("#tab-test, #tab-preview").first().click();
+        await expect(alice.locator(".collab-participant-chip").first()).toHaveAttribute("title", /Bob — (test|preview)/);
+        await expect(alice.locator('.collab-participant-chip[data-persist-check="1"]')).toHaveCount(0);
+
+        await bob.close();
+    });
+
+    test("clicking a participant (chip or overflow list) follows them to their tab", async ({ page, context }) => {
+        const roomId = uniqueRoomId("follow-tab");
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1" }] }]
+        });
+
+        const alice = page;
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await openRoomAs(bob, roomId, "Bob");
+
+        // Bob goes to Logic → clicking his chip switches Alice from Designer to Logic.
+        await bob.locator("#tab-logic").click();
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toHaveAttribute("title", /Bob — logic/);
+        await expect(alice.locator(".svc-toolbox").first()).toBeVisible();
+        await alice.locator('.collab-participant-chip[title*="Bob"]').click();
+        await expect(alice.locator(".svc-logic-tab").first()).toBeVisible();
+
+        // Bob back to Designer → clicking his row in the overflow list follows him.
+        await bob.locator("#tab-designer").click();
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toHaveAttribute("title", /Bob — designer/);
+        await alice.getByRole("button", { name: "Participants" }).click();
+        await alice.locator(".collab-participant-row", { hasText: "Bob" }).click();
+        await expect(alice.locator(".svc-toolbox").first()).toBeVisible();
+
+        await bob.close();
     });
 
     test("remote cursor lands on the same survey spot when the windows differ in width", async ({ page, context }) => {
@@ -341,6 +423,57 @@ test.describe("presence UI", () => {
         await bob.close();
     });
 
+    test("property-grid focus badge is visible in the flyout sidebar", async ({ page, context }) => {
+        const roomId = uniqueRoomId("pres-pg-flyout");
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1" }] }]
+        });
+
+        // Narrow window → the sidebar opens as a FLYOUT whose visible panel
+        // sits OUTSIDE the .svc-side-bar host box (which shrinks to the tabs
+        // strip); the badge used to be clipped away against the host box.
+        const alice = page;
+        await alice.setViewportSize({ width: 1071, height: 618 });
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await bob.setViewportSize({ width: 1071, height: 618 });
+        await openRoomAs(bob, roomId, "Bob");
+
+        await alice.locator('.svc-sidebar-tabs button[title="General"]').click();
+        await bob.locator('.svc-sidebar-tabs button[title="General"]').click();
+
+        // Bob focuses the Survey title field → Alice (same object selected,
+        // the survey) sees the ring AND the name badge on her grid field.
+        await bob.locator('.svc-side-bar [data-name="title"] input').first().click();
+        const aliceField = alice.locator('.svc-side-bar [data-name="title"] .spg-question__content');
+        await expect(aliceField).toHaveAttribute("data-collab-focus", "on");
+        const badge = alice.locator(".collab-presence-badge", { hasText: "Bob" });
+        await expect(badge).toBeVisible();
+        await expect(async () => {
+            const f = (await aliceField.boundingBox())!;
+            const b = (await badge.boundingBox())!;
+            expect(Math.abs(b.x + b.width - (f.x + f.width - 6))).toBeLessThanOrEqual(3);
+            expect(Math.abs(b.y - (f.y + f.height + 6))).toBeLessThanOrEqual(3);
+        }).toPass({ timeout: 10_000 });
+
+        // A boolean row rings just the checkbox decorator, not the whole
+        // row content (which spans the checkbox AND its label).
+        await bob.locator('.svc-side-bar [data-name="showTitle"] .sd-checkbox__decorator').click();
+        const aliceDecorator = alice.locator('.svc-side-bar [data-name="showTitle"] .sd-checkbox__decorator');
+        await expect(aliceDecorator).toHaveAttribute("data-collab-focus", "on");
+        await expect(alice.locator('.svc-side-bar [data-name="showTitle"] .spg-question__content[data-collab-focus]')).toHaveCount(0);
+        // The badge must not hang out past the ring's left edge on a node
+        // this narrow - it grows rightwards from the checkbox instead.
+        await expect(async () => {
+            const d = (await aliceDecorator.boundingBox())!;
+            const b = (await badge.boundingBox())!;
+            expect(b.x).toBeGreaterThanOrEqual(d.x - 3);
+            expect(Math.abs(b.y - (d.y + d.height + 6))).toBeLessThanOrEqual(3);
+        }).toPass({ timeout: 10_000 });
+
+        await bob.close();
+    });
+
     test("focusing inline editors (choice, question title, survey title) lights the native border for peers", async ({ page, context }) => {
         const roomId = uniqueRoomId("pres-edit");
         await createRoom(page, roomId, {
@@ -369,6 +502,19 @@ test.describe("presence UI", () => {
         }).toPass({ timeout: 10_000 });
         const aliceRing = alice.locator('[data-sv-drop-target-survey-element="q1"] > .svc-question__content');
         await expect(aliceRing).toHaveAttribute("data-collab-focus", "on");
+
+        // The editor's badge anchors to its VISIBLE focus border, which is
+        // inflated past the .svc-string-editor rect (-4px/-8px offsets). Two
+        // badges are up (q1 ring + editor) in a tick-dependent DOM order, so
+        // look for the one hugging the border's bottom-right corner.
+        await expect(async () => {
+            const border = (await aliceChoiceEditor.locator(".svc-string-editor__border--focus").boundingBox())!;
+            const badges = await alice.locator(".collab-presence-badge").all();
+            const boxes = await Promise.all(badges.map((b) => b.boundingBox()));
+            expect(boxes.some((b) => !!b &&
+                Math.abs(b.x + b.width - (border.x + border.width - 6)) <= 3 &&
+                Math.abs(b.y - (border.y + border.height + 6)) <= 3)).toBe(true);
+        }).toPass({ timeout: 10_000 });
 
         // Bob moves into the question TITLE editor → the border follows.
         await questionLocator(bob, "q1").locator(".sd-question__title .sv-string-editor").first().click();

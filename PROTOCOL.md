@@ -209,9 +209,13 @@ socket):
 ```
 
 Sent for every disconnecting client (even one that never sent presence — receivers
-ignore unknown ids). Clients should also run a staleness sweep (the reference
-client drops peers silent for 45 s; clients re-send full state every 15 s as a
-heartbeat) in case a `presence-leave` is lost.
+ignore unknown ids). To catch dropped or half-open connections that never send a
+clean close, the server runs a WebSocket-level **ping/pong keepalive**: it pings
+each socket periodically (reference: every 30 s) and terminates any that fails to
+answer, which fires this same `presence-leave`. A browser answers pings at the
+WebSocket layer even in a throttled/backgrounded tab, so the reference client does
+**not** run its own timer-based staleness sweep — a JS-timer sweep would falsely
+drop an idle observer whose background tab throttled its heartbeat.
 
 ## Room lifecycle
 

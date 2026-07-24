@@ -20,9 +20,12 @@
  *
  * Presence responsibilities are split: the PresencePlugin determines the
  * state (focus/selection/cursor) and renders remote peers; this module only
- * moves the opaque state over the wire (throttle, heartbeat, staleness) and
- * routes the server's user-stamped envelopes ({clientId, name, color, state})
- * into the plugin's roster.
+ * moves the opaque state over the wire (send-throttled) and routes the
+ * server's user-stamped envelopes ({clientId, name, color, state}) into the
+ * plugin's roster. Liveness is the server's job: its WS ping/pong keepalive
+ * detects dead connections and broadcasts the leave, so this module does NOT
+ * time out peers itself (a timer-based sweep would falsely drop an idle peer
+ * whose background tab throttled its heartbeat).
  */
 import type { IPresencePeerEntry } from "../server/protocol";
 
@@ -39,6 +42,19 @@ export interface IJournalPluginLike {
     apply(input: unknown): unknown;
 }
 
+/**
+ * Structural mirror of survey-creator-core's IJournalRecord — the shape a
+ * "version history" view needs. Kept local (not imported) per the zero-runtime
+ * -imports rule; the fields match journal-record.ts (`op` is the numeric
+ * JournalOp, `payload` carries the change's target/value).
+ */
+export interface IRoomChange {
+    seq: number;
+    timestamp: number;
+    op: number;
+    payload: any;
+}
+
 export interface IPresenceEvent {
     add(handler: (sender: unknown, options: unknown) => void): void;
     remove(handler: (sender: unknown, options: unknown) => void): void;
@@ -47,7 +63,7 @@ export interface IPresenceEvent {
 /** Structural mirror of the PresencePlugin surface we use. */
 export interface IPresencePluginLike {
     onStateChanged: IPresenceEvent;
-    /** Fires on every roster mutation (setPeers/upsertPeer/removePeer/clearPeers/dropStalePeers). */
+    /** Fires on every roster mutation (setPeers/upsertPeer/removePeer/clearPeers). */
     onPeersChanged: IPresenceEvent;
     getState(): unknown;
     readonly peers: ReadonlyMap<string, IPresencePeerLike>;
@@ -55,7 +71,6 @@ export interface IPresencePluginLike {
     upsertPeer(entry: IPresencePeerEntry): void;
     removePeer(clientId: string): void;
     clearPeers(): void;
-    dropStalePeers(olderThanMs: number): void;
 }
 
 /** Structural mirror of the creator — we only set its survey JSON. */
@@ -86,6 +101,15 @@ export interface ICollabOptions {
     name?: string;
     /** The peer roster changed (join/update/leave). Excludes self. */
     onPresence?: (peers: ReadonlyMap<string, IPresencePeerLike>) => void;
+    /**
+     * The room's change history grew or a record was updated in place. Carries
+     * every journal record the room has seen — the init log (history to date),
+     * remote records, and this client's local edits — in arrival order. Backs
+     * the "Show Version History" view. Not derivable from `plugin.records`,
+     * which holds this client's LOCAL edits only (applied remote/init records
+     * are suppressed from it via `recorder.isApplying`).
+     */
+    onHistoryChanged?: (changes: ReadonlyArray<IRoomChange>) => void;
 }
 
 export interface ICollabConnection {
@@ -94,10 +118,6 @@ export interface ICollabConnection {
 
 /** Outgoing presence is coalesced to at most one message per this interval. */
 const PRESENCE_SEND_MS = 40;
-/** Full state re-send interval — the liveness signal for peers' staleness sweeps. */
-const PRESENCE_HEARTBEAT_MS = 15_000;
-/** Peers silent for longer than this are dropped (3 missed heartbeats). */
-const PRESENCE_STALE_MS = 45_000;
 
 export function connectCollab(opts: ICollabOptions): ICollabConnection {
     const { creator, plugin, presence, roomId } = opts;
@@ -109,6 +129,15 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
 
     // Gate outgoing records until the init bootstrap has been applied.
     let ready = false;
+
+    // --- room change history (Show Version History) ----------------------------
+    // Accumulated from all three record sources; onRecordChanged mutates entries
+    // in place (coalescing), so we keep references and just re-emit.
+    const history: IRoomChange[] = [];
+    const emitHistory = (): void => opts.onHistoryChanged?.(history);
+    const recordHistory = (record: unknown): void => {
+        if (!!record && typeof record === "object") history.push(record as IRoomChange);
+    };
 
     // --- presence: own state (owned by the plugin, only shipped from here) ----
     let clientId: string | null = null;
@@ -138,12 +167,6 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
     const isPeerEntry = (entry: IPresencePeerEntry | undefined): entry is IPresencePeerEntry =>
         !!entry && entry.clientId !== clientId && !!entry.state;
 
-    const heartbeat = setInterval(() => {
-        schedulePresenceSend();
-        // Staleness backstop for a server that missed a close.
-        presence.dropStalePeers(PRESENCE_STALE_MS);
-    }, PRESENCE_HEARTBEAT_MS);
-
     ws.addEventListener("message", (ev) => {
         let msg: any;
         try {
@@ -159,13 +182,19 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
             // Bootstrap order matters: seed does NOT produce journal records,
             // then the log replays in server order (apply() suppresses echo).
             creator.JSON = msg.seed ?? {};
-            if (Array.isArray(msg.log) && msg.log.length > 0) plugin.apply(msg.log);
+            if (Array.isArray(msg.log) && msg.log.length > 0) {
+                plugin.apply(msg.log);
+                for (const record of msg.log) recordHistory(record);
+                emitHistory();
+            }
             ready = true;
             opts.onStatus?.("connected");
             // Announce ourselves so existing occupants see the newcomer at once.
             schedulePresenceSend();
         } else if (msg.type === "record") {
             plugin.apply(msg.payload);
+            recordHistory(msg.payload);
+            emitHistory();
         } else if (msg.type === "presence-sync") {
             const peers = Array.isArray(msg.peers) ? (msg.peers as IPresencePeerEntry[]).filter(isPeerEntry) : [];
             presence.setPeers(peers);
@@ -181,10 +210,21 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
             ws.send(JSON.stringify({ type: "append", payload: options.record }));
         }
     };
-    plugin.onRecordAdded.add(sendRecord);
+    // A local edit: ship it and add it to the room history.
+    const onLocalRecordAdded = (sender: unknown, options: { record: unknown }): void => {
+        sendRecord(sender, options);
+        recordHistory(options.record);
+        emitHistory();
+    };
     // A coalesced record was updated in place — re-send it; the server appends
-    // it as a new log entry and replay converges (last write wins).
-    plugin.onRecordChanged.add(sendRecord);
+    // it as a new log entry and replay converges (last write wins). The history
+    // entry is the same object reference, already updated — just re-emit.
+    const onLocalRecordChanged = (sender: unknown, options: { record: unknown }): void => {
+        sendRecord(sender, options);
+        emitHistory();
+    };
+    plugin.onRecordAdded.add(onLocalRecordAdded);
+    plugin.onRecordChanged.add(onLocalRecordChanged);
 
     // The plugins outlive the socket — unhook every handler or each reconnect
     // stacks another dead closure retaining the old WebSocket.
@@ -192,15 +232,14 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
     const cleanup = (): void => {
         if (disposed) return;
         disposed = true;
-        clearInterval(heartbeat);
         if (sendTimer !== undefined) clearTimeout(sendTimer);
         // No frozen cursors: the roster dies with the connection. Clear BEFORE
         // detaching so the caller still hears the final empty roster.
         presence.clearPeers();
         presence.onStateChanged.remove(stateChanged);
         presence.onPeersChanged.remove(peersChanged);
-        plugin.onRecordAdded.remove(sendRecord);
-        plugin.onRecordChanged.remove(sendRecord);
+        plugin.onRecordAdded.remove(onLocalRecordAdded);
+        plugin.onRecordChanged.remove(onLocalRecordChanged);
         opts.onStatus?.("closed");
     };
     ws.addEventListener("close", cleanup);

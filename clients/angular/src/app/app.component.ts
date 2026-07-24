@@ -53,7 +53,10 @@ export class AppComponent implements AfterViewInit, OnDestroy {
 
     ngAfterViewInit(): void {
         if (!this.roomId) return;
-        const bar = initStatusBar(this.barElement.nativeElement, "Angular", this.roomId);
+        const bar = initStatusBar(this.barElement.nativeElement, "Angular", this.roomId, {
+            onSaveVersion: (label) => this.plugin.snapshot(label),
+            onGoToParticipant: (user) => { if (user.tab) this.creator.activeTab = user.tab; }
+        });
 
         this.connection = connectCollab({
             creator: this.creator,
@@ -62,7 +65,8 @@ export class AppComponent implements AfterViewInit, OnDestroy {
             roomId: this.roomId,
             name: getDisplayName(),
             onStatus: (s) => bar.setStatus(s),
-            onPresence: (peers) => bar.setParticipants(peersToParticipants(peers))
+            onPresence: (peers) => bar.setParticipants(peersToParticipants(peers)),
+            onHistoryChanged: (changes) => bar.setHistory(changes)
         });
     }
 
