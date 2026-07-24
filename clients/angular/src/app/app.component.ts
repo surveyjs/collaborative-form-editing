@@ -4,7 +4,8 @@ import { AfterViewInit, Component, OnDestroy } from "@angular/core";
 import "survey-core/i18n";
 import "survey-creator-core/i18n";
 import { slk } from "survey-core";
-import { CollabBarPlugin, JournalPlugin, PresencePlugin, SurveyCreatorModel } from "survey-creator-core";
+import { CollabBarPlugin, JournalPlugin, PresencePlugin, SurveyCreatorModel, registerCreatorTheme } from "survey-creator-core";
+import SurveyThemes from "survey-core/themes";
 import { SurveyCreatorModule } from "survey-creator-angular";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../../shared/collab-client";
 import type { ICollabConnection } from "../../../../shared/collab-client";
@@ -12,6 +13,12 @@ import { SURVEYJS_LICENSE_KEY } from "../license-key";
 
 // Baked in at build time from the environment (see scripts/gen-license-key.mjs).
 if (SURVEYJS_LICENSE_KEY) slk(SURVEYJS_LICENSE_KEY);
+
+// Only the light creator theme is registered out of the box; without a dark
+// variant of each theme the Light/Dark switch in the creator's theme settings
+// stays disabled. registerCreatorTheme expects survey-core themes (themeName +
+// colorPalette pairs), not the survey-creator-core/themes bundle.
+registerCreatorTheme(SurveyThemes);
 
 @Component({
     selector: "app-root",

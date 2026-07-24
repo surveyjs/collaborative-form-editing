@@ -1,7 +1,8 @@
 /// <reference types="vite/client" />
 import { createApp, h } from "vue";
 import { slk } from "survey-core";
-import { CollabBarPlugin, JournalPlugin, PresencePlugin, SurveyCreatorModel } from "survey-creator-core";
+import { CollabBarPlugin, JournalPlugin, PresencePlugin, SurveyCreatorModel, registerCreatorTheme } from "survey-creator-core";
+import SurveyThemes from "survey-core/themes";
 import { SurveyCreatorComponent } from "survey-creator-vue";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
 import "survey-core/survey-core.css";
@@ -13,6 +14,12 @@ import "survey-creator-core/i18n";
 
 // Baked in at build time from the environment (see envPrefix in vite.config.ts).
 if (import.meta.env.SURVEYJS_LICENSE_KEY) slk(import.meta.env.SURVEYJS_LICENSE_KEY);
+
+// Only the light creator theme is registered out of the box; without a dark
+// variant of each theme the Light/Dark switch in the creator's theme settings
+// stays disabled. registerCreatorTheme expects survey-core themes (themeName +
+// colorPalette pairs), not the survey-creator-core/themes bundle.
+registerCreatorTheme(SurveyThemes);
 
 const roomId = getRoomIdFromUrl();
 if (!roomId) {
