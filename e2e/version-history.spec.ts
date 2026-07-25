@@ -45,4 +45,32 @@ test.describe("version history — react", () => {
         await page.keyboard.press("Escape");
         await expect(panel(page)).toBeHidden();
     });
+
+    test("panel drags by its header", async ({ page }) => {
+        const roomId = uniqueRoomId("history-drag");
+        await createRoom(page, roomId);
+        await openRoom(page, "react", roomId);
+        await openHistory(page);
+
+        const before = (await panel(page).boundingBox())!;
+        const handle = (await page.locator(".collab-version-header").boundingBox())!;
+        // Grab the middle of the header (away from the minimize/close buttons)
+        // and drag left and down.
+        await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(handle.x + handle.width / 2 - 300, handle.y + handle.height / 2 + 40, { steps: 8 });
+        await page.mouse.up();
+
+        const after = (await panel(page).boundingBox())!;
+        // Moved left by the drag delta; the full-height panel cannot move
+        // vertically (clamped to the 12px viewport inset), and keeps its size.
+        expect(after.x).toBeCloseTo(before.x - 300, 0);
+        expect(after.y).toBeCloseTo(12, 0);
+        expect(after.width).toBeCloseTo(before.width, 0);
+        expect(after.height).toBeCloseTo(before.height, 0);
+
+        // Escape still closes the floating panel.
+        await page.keyboard.press("Escape");
+        await expect(panel(page)).toBeHidden();
+    });
 });
