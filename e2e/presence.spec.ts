@@ -713,6 +713,11 @@ test.describe("presence UI", () => {
         }).toPass({ timeout: 10_000 });
         const aliceBadge = alice.locator(".collab-presence-badge", { hasText: "Bob" });
         await expect(aliceBadge).toBeVisible();
+        // The cell's textarea goes transparent while decorated - its opaque
+        // background would otherwise paint over the inset ring's side edges.
+        const cellTextareaBg = (idx: number) =>
+            aliceCells.nth(idx).locator("textarea").evaluate((el) => getComputedStyle(el).backgroundColor);
+        expect(await cellTextareaBg(0)).toBe("rgba(0, 0, 0, 0)");
 
         // Bob moves to the de cell of the same row → the ring follows, the
         // old cell is undecorated (never two rings for one peer).
@@ -720,6 +725,9 @@ test.describe("presence UI", () => {
         await expect(aliceCells.nth(1)).toHaveAttribute("data-collab-focus", "on");
         await expect(aliceCells.first()).not.toHaveAttribute("data-collab-focus", "on");
         await expect(alice.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(1);
+        // The undecorated cell's textarea gets its opaque background back.
+        expect(await cellTextareaBg(0)).not.toBe("rgba(0, 0, 0, 0)");
+        expect(await cellTextareaBg(1)).toBe("rgba(0, 0, 0, 0)");
 
         // Local focus wins: when Alice puts her caret into the ringed cell,
         // Bob's decoration leaves it entirely - ring AND badge, no leftovers.
