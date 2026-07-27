@@ -350,7 +350,11 @@ test.describe("presence UI", () => {
 
     test("remote cursor lands on the same survey spot when the windows differ in width", async ({ page, context }) => {
         const roomId = uniqueRoomId("pres-size");
+        // responsive width: the survey canvas stretches with the window, so
+        // the two peers' canvas blocks genuinely differ in width (the default
+        // static mode gives both a fixed 672px block, which maps trivially).
         await createRoom(page, roomId, {
+            widthMode: "responsive",
             pages: [
                 { name: "p1", elements: [{ type: "text", name: "q1" }] },
                 { name: "p2", elements: [{ type: "text", name: "q2" }] }
@@ -359,8 +363,10 @@ test.describe("presence UI", () => {
 
         // Alice (receiver) has a much narrower window than Bob (sender), so
         // every layout box - toolbox, canvas, pages - differs between them.
-        // Cursor positions travel as fractions of a shared DOM anchor, so the
-        // cursor must land on the same SURVEY spot, not the same pixels.
+        // Element/page-anchored cursors travel as fractions of the shared DOM
+        // anchor; canvas ("surface") cursors travel as px offsets from the
+        // survey canvas block, edge-mapped onto the receiver's block - either
+        // way the cursor must land on the same SURVEY spot, not the same pixels.
         const alice = page;
         await alice.setViewportSize({ width: 1000, height: 1100 });
         await openRoomAs(alice, roomId, "Alice");
@@ -410,15 +416,150 @@ test.describe("presence UI", () => {
         // anchored to the page wrapper.
         await expectMapped('[data-sv-drop-target-survey-element="p2"]', 0.75, 0.05);
 
-        // Over the blank canvas in the side gutter next to page1: anchored to
-        // the designer's scrolled CONTENT box. This is the case that used to
-        // jump when the windows differed - fractions were taken from the
-        // visible scroll viewport, whose size depends on the window.
-        const bContent = await rect(bob, ".svc-tab-designer_content");
-        const bPage = await rect(bob, '[data-sv-drop-target-survey-element="p1"]');
-        const gutterFx = ((bContent.left + bPage.left) / 2 - bContent.left) / bContent.width;
-        const gutterFy = (bPage.top + bPage.height / 2 - bContent.top) / bContent.height;
-        await expectMapped(".svc-tab-designer_content", gutterFx, gutterFy);
+        // Canvas ("surface") cursors: px offsets from the survey canvas block
+        // (the centered node wrapping the header and the pages), edge-mapped
+        // onto the receiver's block. This replaces the old fraction contract,
+        // which misplaced cursors between differently-sized windows: a cursor
+        // beside the survey title rendered ON the title for a wider peer.
+        const mapOffsetSpec = (d: number, ws: number, wr: number): number => {
+            if (ws === wr) return d;
+            if (d < 0) return d;
+            if (d > ws) return wr + (d - ws);
+            const edge = Math.min(120, ws / 2, wr / 2);
+            if (d <= edge) return d;
+            if (ws - d <= edge) return wr - (ws - d);
+            return edge + (d - edge) * (wr - 2 * edge) / (ws - 2 * edge);
+        };
+        const canvasRect = (p: Page) =>
+            p.evaluate(() => {
+                const content = document.querySelector(".svc-tab-designer_content")!;
+                const block = content.querySelector(".svc-designer-surface") ?? content;
+                const r = block.getBoundingClientRect();
+                return { left: r.left, top: r.top, width: r.width, height: r.height };
+            });
+        let lastCursor = { x: 0, y: 0 };
+        const expectSurfacePx = async (bobPoint: () => Promise<{ x: number; y: number }>) => {
+            await expect(async () => {
+                const bCanvas = await canvasRect(bob);
+                const pt = await bobPoint();
+                await bob.mouse.move(pt.x - 25, pt.y - 25);
+                await bob.mouse.move(pt.x, pt.y, { steps: 3 });
+                await bob.waitForTimeout(250);
+                const aCanvas = await canvasRect(alice);
+                const expected = {
+                    x: aCanvas.left + mapOffsetSpec(pt.x - bCanvas.left, bCanvas.width, aCanvas.width),
+                    y: aCanvas.top + mapOffsetSpec(pt.y - bCanvas.top, bCanvas.height, aCanvas.height)
+                };
+                const got = await alice.locator(".collab-presence-cursor").evaluate((el) => ({
+                    display: (el as HTMLElement).style.display,
+                    x: parseFloat((el as HTMLElement).style.left),
+                    y: parseFloat((el as HTMLElement).style.top)
+                }));
+                expect(got.display).toBe("block");
+                expect(Math.abs(got.x - expected.x)).toBeLessThanOrEqual(3);
+                expect(Math.abs(got.y - expected.y)).toBeLessThanOrEqual(3);
+                lastCursor = got;
+            }).toPass({ timeout: 20_000 });
+        };
+
+        // THE reported bug: Bob points just left of the survey title text -
+        // his cursor must render left of Alice's title too, not on top of it.
+        const titleSel = ".svc-designer-header .svc-string-editor";
+        await expectSurfacePx(async () => {
+            const t = await rect(bob, titleSel);
+            return { x: t.left - 12, y: t.top + t.height / 2 };
+        });
+        const aTitle = await rect(alice, titleSel);
+        expect(lastCursor.x).toBeLessThan(aTitle.left);
+
+        // Blank canvas in the side gutter next to page1 - a signed offset
+        // left of the canvas block keeps its px distance from that edge.
+        await expectSurfacePx(async () => {
+            const bContent = await rect(bob, ".svc-tab-designer_content");
+            const bPage = await rect(bob, '[data-sv-drop-target-survey-element="p1"]');
+            return { x: (bContent.left + bPage.left) / 2, y: bPage.top + bPage.height / 2 };
+        });
+
+        // No mid-canvas case here: page/question adorners tile the canvas
+        // interior (even the gap between pages belongs to their drop-target
+        // boxes), so "surface" only shows near the edges - covered above.
+        // The proportional middle branch of mapOffset is unit-tested.
+
+        await bob.close();
+    });
+
+    test("canvas cursor maps exactly between windows when the survey width is static", async ({ page, context }) => {
+        const roomId = uniqueRoomId("pres-static");
+        await createRoom(page, roomId, {
+            widthMode: "static",
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1" }] }]
+        });
+
+        // With a static survey width the canvas block is centered and has the
+        // SAME size on both peers, so canvas px offsets map 1:1 even though
+        // the windows (hence the gutters around the block) differ. Fractions
+        // of the content box - the old contract - could not express this.
+        const alice = page;
+        await alice.setViewportSize({ width: 1000, height: 1100 });
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await bob.setViewportSize({ width: 1900, height: 1100 });
+        await openRoomAs(bob, roomId, "Bob");
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toBeVisible();
+
+        const canvasRect = (p: Page) =>
+            p.evaluate(() => {
+                const content = document.querySelector(".svc-tab-designer_content")!;
+                const block = content.querySelector(".svc-designer-surface") ?? content;
+                const r = block.getBoundingClientRect();
+                return { left: r.left, top: r.top, width: r.width, height: r.height };
+            });
+
+        await expect(async () => {
+            const bCanvas = await canvasRect(bob);
+            const aCanvas = await canvasRect(alice);
+            // The whole point of the static mode: equal canvas blocks.
+            expect(Math.abs(bCanvas.width - aCanvas.width)).toBeLessThanOrEqual(1);
+            const dx = 30;
+            const dy = 40;
+            await bob.mouse.move(bCanvas.left + dx + 20, bCanvas.top + dy + 20);
+            await bob.mouse.move(bCanvas.left + dx, bCanvas.top + dy, { steps: 3 });
+            await bob.waitForTimeout(250);
+            const got = await alice.locator(".collab-presence-cursor").evaluate((el) => ({
+                display: (el as HTMLElement).style.display,
+                x: parseFloat((el as HTMLElement).style.left),
+                y: parseFloat((el as HTMLElement).style.top)
+            }));
+            expect(got.display).toBe("block");
+            expect(Math.abs(got.x - (aCanvas.left + dx))).toBeLessThanOrEqual(3);
+            expect(Math.abs(got.y - (aCanvas.top + dy))).toBeLessThanOrEqual(3);
+        }).toPass({ timeout: 20_000 });
+
+        // Bob's much wider window has a huge gutter around the centered
+        // canvas. When he points deep into it, Alice's mapped point would
+        // land on HER toolbox - instead the cursor must pin to the left edge
+        // of her designer column, never reading as "pointing at a tool".
+        await expect(async () => {
+            const bCanvas = await canvasRect(bob);
+            const aColumn = await alice.locator(".svc-tab-designer").first().evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                return { left: r.left, top: r.top };
+            });
+            const aCanvas = await canvasRect(alice);
+            const dy = 40;
+            await bob.mouse.move(bCanvas.left - 130, bCanvas.top + dy + 20);
+            await bob.mouse.move(bCanvas.left - 150, bCanvas.top + dy, { steps: 3 });
+            await bob.waitForTimeout(250);
+            const got = await alice.locator(".collab-presence-cursor").evaluate((el) => ({
+                display: (el as HTMLElement).style.display,
+                x: parseFloat((el as HTMLElement).style.left),
+                y: parseFloat((el as HTMLElement).style.top)
+            }));
+            expect(got.display).toBe("block");
+            expect(got.x).toBeGreaterThanOrEqual(aColumn.left);
+            expect(got.x).toBeLessThanOrEqual(aCanvas.left);
+            expect(Math.abs(got.y - (aCanvas.top + dy))).toBeLessThanOrEqual(3);
+        }).toPass({ timeout: 20_000 });
 
         await bob.close();
     });
