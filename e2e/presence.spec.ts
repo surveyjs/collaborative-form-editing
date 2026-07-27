@@ -675,6 +675,133 @@ test.describe("presence UI", () => {
         await bob.close();
     });
 
+    test("focusing a translation cell rings it for peers; the ring moves and clears on tab exit", async ({ page, context }) => {
+        const roomId = uniqueRoomId("pres-tr");
+        // A de translation makes the used locale visible for both peers, so
+        // the title row renders two cells: "default" and "de".
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1", title: { default: "Question 1", de: "Frage 1" } }] }]
+        });
+
+        // At the default width the Translations tab collapses into the "More"
+        // overflow menu - widen both windows so it is directly clickable.
+        const alice = page;
+        await alice.setViewportSize({ width: 1600, height: 900 });
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await bob.setViewportSize({ width: 1600, height: 900 });
+        await openRoomAs(bob, roomId, "Bob");
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toBeVisible();
+
+        // The ring renders only when the LOCAL client is on the Translations
+        // tab too (same gate as the designer decorations) - both go there.
+        await alice.locator("#tab-translation").click();
+        await bob.locator("#tab-translation").click();
+        // Locale cells of the strings table (the header survey and the
+        // row-text cells never carry the ring).
+        const aliceCells = alice.locator("#scrollableDiv-translation .st-strings td.st-table__cell:not(.st-table__cell--row-text)");
+        await expect(aliceCells.first()).toBeVisible();
+
+        // Bob focuses the default-locale textarea → Alice sees exactly that
+        // cell ringed in Bob's color, with his name badge under it.
+        const bobInputs = bob.locator("#scrollableDiv-translation .st-strings td.st-table__cell textarea");
+        await bobInputs.first().click();
+        await expect(aliceCells.first()).toHaveAttribute("data-collab-focus", "on");
+        await expect(alice.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(1);
+        await expect(async () => {
+            expect(await ringShowsPeerColor(aliceCells.first())).toBe(true);
+        }).toPass({ timeout: 10_000 });
+        const aliceBadge = alice.locator(".collab-presence-badge", { hasText: "Bob" });
+        await expect(aliceBadge).toBeVisible();
+
+        // Bob moves to the de cell of the same row → the ring follows, the
+        // old cell is undecorated (never two rings for one peer).
+        await bobInputs.nth(1).click();
+        await expect(aliceCells.nth(1)).toHaveAttribute("data-collab-focus", "on");
+        await expect(aliceCells.first()).not.toHaveAttribute("data-collab-focus", "on");
+        await expect(alice.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(1);
+
+        // Local focus wins: when Alice puts her caret into the ringed cell,
+        // Bob's decoration leaves it entirely - ring AND badge, no leftovers.
+        const aliceInput1 = alice.locator("#scrollableDiv-translation .st-strings td.st-table__cell textarea").nth(1);
+        await aliceInput1.click();
+        await expect(alice.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(0);
+        await expect(aliceBadge).toBeHidden();
+
+        // Her caret leaves - Bob still holds the cell, the decoration returns.
+        await aliceInput1.blur();
+        await expect(aliceCells.nth(1)).toHaveAttribute("data-collab-focus", "on");
+        await expect(aliceBadge).toBeVisible();
+
+        // Bob leaves the tab → his focus cannot survive it (the tab model is
+        // disposed), so the ring clears instead of dimming to "away".
+        await bob.locator("#tab-designer").click();
+        await expect(alice.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(0);
+
+        await bob.close();
+    });
+
+    test("both clients in one translation cell: local focus removes the peer decoration, leaving it removes cleanly", async ({ page, context }) => {
+        // Regression for the manual-testing report: A focuses a cell, B
+        // focuses the SAME cell, A re-focuses it - on B the ring used to
+        // vanish while the badge stayed floating, reading as a broken
+        // highlight. Local focus must remove the peer decoration ENTIRELY
+        // (ring and badge together), and it must come back once the local
+        // caret leaves the cell.
+        const roomId = uniqueRoomId("pres-tr-samecell");
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1", title: { default: "Question 1", de: "Frage 1" } }] }]
+        });
+
+        const alice = page;
+        await alice.setViewportSize({ width: 1600, height: 900 });
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await bob.setViewportSize({ width: 1600, height: 900 });
+        await openRoomAs(bob, roomId, "Bob");
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toBeVisible();
+
+        await alice.locator("#tab-translation").click();
+        await bob.locator("#tab-translation").click();
+        const cellSel = "#scrollableDiv-translation .st-strings td.st-table__cell:not(.st-table__cell--row-text)";
+        const aliceInput = alice.locator(`${cellSel} textarea`).first();
+        const bobInputs = bob.locator(`${cellSel} textarea`);
+        const bobCell = bob.locator(cellSel).first();
+        const bobBadge = bob.locator(".collab-presence-badge", { hasText: "Alice" });
+
+        // 1) Alice focuses the cell → Bob (not in it) sees her ring + badge.
+        await aliceInput.click();
+        await expect(bobCell).toHaveAttribute("data-collab-focus", "on");
+        await expect(async () => {
+            expect(await ringShowsPeerColor(bobCell)).toBe(true);
+        }).toPass({ timeout: 10_000 });
+        await expect(bobBadge).toBeVisible();
+
+        // 2) Bob focuses the SAME cell → Alice's decoration leaves his screen
+        // entirely: no ring, and no badge floating under a ringless cell.
+        await bobInputs.first().click();
+        await expect(bob.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(0);
+        await expect(bobBadge).toBeHidden();
+
+        // 3) Alice re-selects the same cell (the manual repro step) → still
+        // nothing on Bob's side while his caret stays in that cell.
+        await aliceInput.blur();
+        await aliceInput.click();
+        await expect(bob.locator("#scrollableDiv-translation [data-collab-focus]")).toHaveCount(0);
+        await expect(bobBadge).toBeHidden();
+
+        // 4) Bob moves his caret to another cell → Alice's ring AND badge
+        // reappear on the contested cell.
+        await bobInputs.nth(1).click();
+        await expect(bobCell).toHaveAttribute("data-collab-focus", "on");
+        await expect(async () => {
+            expect(await ringShowsPeerColor(bobCell)).toBe(true);
+        }).toPass({ timeout: 10_000 });
+        await expect(bobBadge).toBeVisible();
+
+        await bob.close();
+    });
+
     test("focusing inline editors (choice, question title, survey title) lights the native border for peers", async ({ page, context }) => {
         const roomId = uniqueRoomId("pres-edit");
         await createRoom(page, roomId, {
