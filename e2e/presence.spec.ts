@@ -615,6 +615,66 @@ test.describe("presence UI", () => {
         await bob.close();
     });
 
+    test("designer cursor hides under the opened flyout sidebar", async ({ page, context }) => {
+        const roomId = uniqueRoomId("pres-cur-flyout");
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1" }] }]
+        });
+
+        // Narrow windows → the sidebar opens as a FLYOUT floating OVER the
+        // designer column (z-index 1000), which the fixed presence layer
+        // (z-index 1100) would otherwise paint over. Same viewport on both
+        // peers keeps their layouts identical, so Bob's cursor maps 1:1 onto
+        // Alice's coordinates.
+        const alice = page;
+        await alice.setViewportSize({ width: 1071, height: 618 });
+        await openRoomAs(alice, roomId, "Alice");
+        const bob = await context.newPage();
+        await bob.setViewportSize({ width: 1071, height: 618 });
+        await openRoomAs(bob, roomId, "Bob");
+        await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toBeVisible();
+
+        // Alice opens her flyout panel; Bob's stays closed.
+        await alice.locator('.svc-sidebar-tabs button[title="General"]').click();
+        const alicePanel = alice.locator(".svc-side-bar--flyout .svc-side-bar__container");
+        await expect(alicePanel).toBeVisible();
+
+        // NOT toBeHidden()/toBeVisible() on the cursor: it is a 0x0 box whose
+        // SVG overflows it, and Playwright treats empty boxes as hidden.
+        const cursor = () => alice.locator(".collab-presence-cursor").evaluate((el) => ({
+            display: (el as HTMLElement).style.display,
+            x: parseFloat((el as HTMLElement).style.left)
+        }));
+
+        // Bob points at a canvas spot that on Alice's screen lies under the
+        // panel → his cursor must not draw on top of it.
+        await expect(async () => {
+            const panel = (await alicePanel.boundingBox())!;
+            const q = (await questionLocator(bob, "q1").boundingBox())!;
+            const x = Math.min(q.x + q.width - 20, panel.x + panel.width / 2);
+            expect(x).toBeGreaterThan(panel.x + 10); // sanity: the spot IS covered
+            await bob.mouse.move(x - 30, q.y + q.height / 2);
+            await bob.mouse.move(x, q.y + q.height / 2, { steps: 3 });
+            await bob.waitForTimeout(250);
+            expect((await cursor()).display).toBe("none");
+        }).toPass({ timeout: 20_000 });
+
+        // Left of the panel the same cursor still shows.
+        await expect(async () => {
+            const panel = (await alicePanel.boundingBox())!;
+            const q = (await questionLocator(bob, "q1").boundingBox())!;
+            const x = panel.x - 60;
+            await bob.mouse.move(x + 30, q.y + q.height / 2);
+            await bob.mouse.move(x, q.y + q.height / 2, { steps: 3 });
+            await bob.waitForTimeout(250);
+            const got = await cursor();
+            expect(got.display).toBe("block");
+            expect(got.x).toBeLessThan(panel.x);
+        }).toPass({ timeout: 20_000 });
+
+        await bob.close();
+    });
+
     test("focusing inline editors (choice, question title, survey title) lights the native border for peers", async ({ page, context }) => {
         const roomId = uniqueRoomId("pres-edit");
         await createRoom(page, roomId, {
