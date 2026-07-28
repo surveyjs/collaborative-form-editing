@@ -66,7 +66,7 @@ export interface IPresencePluginLike {
     /** Fires on every roster mutation (setPeers/upsertPeer/removePeer/clearPeers). */
     onPeersChanged: IPresenceEvent;
     getState(): unknown;
-    readonly peers: ReadonlyMap<string, IPresencePeerLike>;
+    readonly peers: ReadonlyMap<string, IPresencePeerEntry>;
     setPeers(entries: IPresencePeerEntry[]): void;
     upsertPeer(entry: IPresencePeerEntry): void;
     removePeer(clientId: string): void;
@@ -79,12 +79,6 @@ export interface ICreatorLike {
 }
 
 export type CollabStatus = "connecting" | "connected" | "closed";
-
-/** A remote participant as stored in the PresencePlugin roster. */
-export interface IPresencePeerLike extends IPresencePeerEntry {
-    /** Local receive time (ms) of the last update. */
-    lastSeen: number;
-}
 
 export interface ICollabOptions {
     creator: ICreatorLike;
@@ -100,7 +94,7 @@ export interface ICollabOptions {
      */
     name?: string;
     /** The peer roster changed (join/update/leave). Excludes self. */
-    onPresence?: (peers: ReadonlyMap<string, IPresencePeerLike>) => void;
+    onPresence?: (peers: ReadonlyMap<string, IPresencePeerEntry>) => void;
     /**
      * The room's change history grew or a record was updated in place. Carries
      * every journal record the room has seen — the init log (history to date),

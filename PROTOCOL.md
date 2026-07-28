@@ -148,7 +148,7 @@ across clients).
 ## Presence (ephemeral extension)
 
 An OPTIONAL extension that lets participants see each other: name, active tab,
-selected element, focused property-grid field, mouse cursor. Servers and clients
+selected element, keyboard focus, mouse cursor. Servers and clients
 that don't implement it interoperate unchanged — all presence message types fall
 under the "unknown types MUST be ignored" rule, and `init.color` is additive.
 
@@ -158,7 +158,7 @@ Principles:
   the **latest** state per connected client and forgets it on disconnect.
 - Presence state is **opaque to the server** (like records). The state schema is a
   creator-side convention: it is produced and consumed by survey-creator-core's
-  `PresencePlugin` (`IPresenceState`) — pure focus data (tab, selection, property-grid
+  `PresencePlugin` (`IPresenceState`) — pure focus data (tab, selection, keyboard
   focus, cursor), with no user identity inside.
 - **User identity lives in the envelope, not the state**: the server stamps
   `clientId`, `name` (from the connection URL) and `color` (server-assigned) onto

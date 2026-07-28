@@ -267,13 +267,19 @@ test.describe("presence UI", () => {
         await bob.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
         await expect(alice.locator(".collab-presence-cursor-name", { hasText: "Bob" })).toBeVisible();
 
-        // Bob switches to the Preview tab → Alice's chip for Bob reflects it in
-        // its tooltip and his ring on the designer dims to the "away" state.
+        // Bob switches to the Preview tab → Alice's chip for Bob reflects it
+        // in its tooltip, and his ring disappears from the designer: the
+        // shared state only describes what Bob does NOW, so his selection is
+        // cleared together with the tab (no "away" ghosts).
         await bob.locator("#tab-test, #tab-preview").first().click();
         await expect(alice.locator('.collab-participant-chip[title*="Bob"]')).toHaveAttribute("title", /Bob — (test|preview)/);
-        await expect(aliceRing).toHaveAttribute("data-collab-focus", "away");
-        // The badge dims with the ring instead of disappearing.
-        await expect(aliceBadge).toHaveCSS("opacity", "0.5");
+        await expect(alice.locator("[data-collab-focus]")).toHaveCount(0);
+        await expect(aliceBadge).toBeHidden();
+
+        // Bob returns to the designer: his selection is re-announced from his
+        // model and the ring comes back without any new click.
+        await bob.locator("#tab-designer").click();
+        await expect(aliceRing).toHaveAttribute("data-collab-focus", "on");
 
         // Bob leaves → all of Bob's artifacts disappear on Alice's side.
         await bob.close();
