@@ -208,4 +208,56 @@ test.describe("collaborative translation sync", () => {
         // a column.
         await expect(cellsB).toHaveCount(1);
     });
+
+    // Follow-up of the previous scenario: once the receiver OPTS IN (checks the
+    // peer-added language in the sidebar list), the new column must show the
+    // translations the peer already made — they are in the receiver's survey
+    // model (the journal applier wrote them into the LocalizableStrings), so
+    // enabling the column must re-read them, not render empty cells.
+    test("checking a peer-added language shows the peer's already-made translations", async ({ page, context }) => {
+        const roomId = uniqueRoomId("tr-optin");
+        await createRoom(page, roomId, ONE_QUESTION_SCHEMA);
+
+        const tabA = page;
+        const tabB = await context.newPage();
+        await openRoom(tabA, "react", roomId);
+        await openRoom(tabB, "react", roomId);
+
+        await tabA.locator("#tab-translation").click();
+        await tabB.locator("#tab-translation").click();
+
+        const cellsA = tabA.locator(".st-strings textarea");
+        const cellsB = tabB.locator(".st-strings textarea");
+        await expect(cellsA).toHaveCount(1);
+        await expect(cellsB).toHaveCount(1);
+
+        // A adds French and commits a translation -> broadcast to B.
+        await addLanguage(tabA, "Français");
+        await expect(cellsA).toHaveCount(2);
+        await cellsA.nth(1).click();
+        await cellsA.nth(1).fill("Bonjour");
+        await cellsA.nth(1).blur();
+
+        // B sees French appear in the language list as an unchecked row (the
+        // strings table stays one column wide).
+        const frenchRowB = tabB
+            .locator(".svc-side-bar [data-name='locales']")
+            .getByText("Français", { exact: true })
+            .filter({ visible: true });
+        await expect(frenchRowB).toHaveCount(1);
+        await expect(cellsB).toHaveCount(1);
+
+        // B opts in: check the French row's checkbox in the sidebar languages
+        // matrix (the row's boolean `isSelected` cell).
+        await tabB
+            .locator(".svc-side-bar [data-name='locales'] tr")
+            .filter({ has: tabB.getByText("Français", { exact: true }) })
+            .locator("input[type='checkbox']")
+            .check({ force: true });
+
+        // The fr column appears AND carries A's translation - the value lives in
+        // B's survey model already, so the freshly built column must show it.
+        await expect(cellsB).toHaveCount(2);
+        await expect(cellsB.nth(1)).toHaveValue("Bonjour");
+    });
 });
