@@ -4,7 +4,12 @@
     "version": "0.1.0",
     "description": "Collaborative Survey Creator editing built on the journal plugin. The Node server is a reference implementation of the language-agnostic protocol (see PROTOCOL.md).",
     "type": "module",
+    "engines": {
+        "node": ">=20.11"
+    },
     "scripts": {
+        "bootstrap": "node scripts/bootstrap.mjs",
+        "postinstall": "node scripts/bootstrap.mjs",
         "server": "tsx server/index.ts",
         "typecheck": "tsc -p tsconfig.json --noEmit",
         "install:clients": "npm --prefix lobby install && npm --prefix clients/react install && npm --prefix clients/vue install && npm --prefix clients/js install && npm --prefix clients/angular install",

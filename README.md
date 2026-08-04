@@ -42,26 +42,41 @@ receiver: presence.upsertPeer(peer)      (the plugin renders the overlay itself)
   npm workspaces on purpose). Survey packages come from the sibling local builds via
   `file:` deps (`../survey-library/...`, `../survey-creator/...`).
 
-## Prerequisites
-
-Sibling repos must be built at matching versions (currently `3.0.0-beta.8`):
-
-- `../survey-library/packages/{survey-core, survey-react-ui, survey-vue3-ui, survey-js-ui, survey-angular-ui}/build`
-- `../survey-creator/packages/{survey-creator-core, survey-creator-react, survey-creator-vue, survey-creator-js, survey-creator-angular}/build`
-
-The `survey-creator-core` build must include the journal and presence plugins
-(`JournalPlugin` and `PresencePlugin` in the bundle). The presence plugin owns both
-sides of presence: capturing the local state (tab, selection, property-grid focus,
-cursor) and rendering remote peers; `collab-client.ts` only ships the opaque state
-and feeds server-stamped `{clientId, name, color, state}` envelopes back into it.
-
 ## Run
 
+Node **20.11+** required (Angular 18). From a bare checkout:
+
 ```bash
-npm install               # server deps
-npm run install:clients   # lobby + 4 clients npm install (first time only)
-npm start                 # builds lobby + all 4 clients, then serves everything on :8080
+npm install    # server deps, then bootstrap: clone/build the sibling survey repos
+               # and install lobby + the 4 clients (first run ~20-40 min, a few GB)
+npm start      # builds lobby + all 4 clients, then serves everything on :8080
 ```
+
+`npm install` runs [`scripts/bootstrap.mjs`](scripts/bootstrap.mjs) as `postinstall`. It is idempotent —
+every step is skipped when its output is already there, so a second `npm install` costs seconds.
+
+| Variable | Effect |
+|---|---|
+| `COLLAB_SKIP_BOOTSTRAP=1` | do nothing (CI, or `npm install <pkg>`) |
+| `COLLAB_FORCE_REBUILD=1` | ignore all skips and rebuild every survey package |
+
+What bootstrap does, and why it is needed at all: this app cannot take the survey packages from
+npm — the published `survey-creator-core` has no `JournalPlugin`/`PresencePlugin`, and the `file:`
+deps of `lobby/` + `clients/*` point at sibling **`build/` output** dirs, which are gitignored in
+both sibling repos. So it:
+
+1. clones the siblings next to this checkout if they are missing (an existing checkout is reused
+   as is and never fetched/checked out over):
+   - `../survey-library` — branch `V3`
+   - `../survey-creator` — branch `feature/journal-plugin` (this is where the plugins live)
+2. builds all 10 packages in dependency order — `survey-core` → `survey-{react,vue3,js,angular}-ui`
+   → `survey-creator-core` → `survey-creator-{react,vue,js,angular}` — producing
+   `../survey-{library,creator}/packages/*/build` at matching versions (currently `3.0.0-beta.8`);
+3. installs `lobby` + the four `clients/*` (same work as `npm run install:clients`, with skips).
+
+The presence plugin owns both sides of presence: capturing the local state (tab, selection,
+property-grid focus, cursor) and rendering remote peers; `collab-client.ts` only ships the opaque
+state and feeds server-stamped `{clientId, name, color, state}` envelopes back into it.
 
 Open http://localhost:8080, create a room, open the same room in another tab/browser
 (any framework) — edits sync live.
