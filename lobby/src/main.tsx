@@ -146,17 +146,11 @@ lobby.onComplete.add(async (sender) => {
         seed = JSON.parse((sender.getValue("seed") as string) || "{}");
     }
 
-    // Presence display name: persist for next time and pass via URL — in dev
-    // the lobby and the clients run on different origins, so localStorage
-    // alone wouldn't reach them.
-    // Slice by code points, not UTF-16 units — a halved surrogate pair here
-    // would poison localStorage and the ?name= param for every future visit.
+    // Presence display name travels via the URL only — the lobby neither
+    // saves nor prefills it, so every visit starts with an empty field.
+    // Slice by code points, not UTF-16 units — a halved surrogate pair
+    // would make encodeURIComponent throw on the ?name= param.
     const name = [...((sender.getValue("name") as string) ?? "").trim()].slice(0, 32).join("");
-    if (name) {
-        try {
-            localStorage.setItem("collab.name", name);
-        } catch { /* private mode etc. — the URL param still carries it */ }
-    }
 
     const enter = (): void => {
         const nameParam = name ? `&name=${encodeURIComponent(name)}` : "";
@@ -189,10 +183,6 @@ lobby.onComplete.add(async (sender) => {
 // Invite links point here with ?room=<id> — prefill and check it right away.
 const presetRoom = new URLSearchParams(location.search).get("room");
 if (presetRoom) lobby.setValue("roomId", presetRoom);
-try {
-    const savedName = localStorage.getItem("collab.name");
-    if (savedName) lobby.setValue("name", savedName);
-} catch { /* private mode — leave the field empty */ }
 updateForRoomState();
 
 // Browser Back from a client restores this page from the back-forward cache
