@@ -104,14 +104,16 @@ ignored (forward compatibility).
 {
   "type": "init",
   "clientId": "3f2c8b9e-...",
-  "color": "#e51a5f",
+  "colorIndex": 1,
+  "color": "#1570EF",
   "seed": { },
   "log": [ { "v": 1, "seq": 1, "...": "opaque record" }, ... ]
 }
 ```
 
-`color` is part of the optional presence extension (see below); servers that don't
-implement presence may omit it, and clients must treat it as optional.
+`colorIndex` and `color` are part of the optional presence extension (see below);
+servers that don't implement presence may omit them, and clients must treat them as
+optional.
 
 The client bootstraps from it: set the creator's survey to `seed`, then apply every
 entry of `log` in array order. The server MUST NOT send any `record` message to a
@@ -150,7 +152,8 @@ across clients).
 An OPTIONAL extension that lets participants see each other: name, active tab,
 selected element, keyboard focus, mouse cursor. Servers and clients
 that don't implement it interoperate unchanged — all presence message types fall
-under the "unknown types MUST be ignored" rule, and `init.color` is additive.
+under the "unknown types MUST be ignored" rule, and `init.colorIndex` / `init.color`
+are additive.
 
 Principles:
 
@@ -161,18 +164,43 @@ Principles:
   `CollaborationPlugin` (`IPresenceState`) — pure focus data (tab, selection, keyboard
   focus, cursor), with no user identity inside.
 - **User identity lives in the envelope, not the state**: the server stamps
-  `clientId`, `name` (from the connection URL) and `color` (server-assigned) onto
-  every relayed peer entry.
+  `clientId`, `name` (from the connection URL) and `colorIndex` (server-assigned,
+  plus its `color` mirror) onto every relayed peer entry.
 - Clients send their **full** state every time (not diffs) — any single message
   fully re-establishes a participant, which makes reconnects self-healing.
 
 ### Colors
 
-The server assigns each connection a color from a fixed palette (documented in
-[`server/protocol.ts`](server/protocol.ts), `PRESENCE_PALETTE`): the lowest palette
-slot not held by another client in the room, wrapping with modulo when exhausted.
-The client's own color arrives in `init.color`; peers' colors ride along in every
-presence message, so clients never need the palette to render others.
+A peer's color is a **slot**, not a hex. The server assigns each connection the first
+slot in `PRESENCE_COLOR_SLOTS` — `1, 2, 3, 4, 6, 7, 8, 9`, in that order — not held by
+another client in the room; a leaver's slot becomes reusable, and past 8 occupants
+slots repeat. Two of the ten theme slots are never assigned:
+
+- `0` is the neutral gray a client paints for a peer whose slot it does not know;
+- `5` is the only slot the theme pairs with a *dark* foreground, and the creator's
+  name badge and cursor pill draw their text white unconditionally — a peer on slot 5
+  would be illegible there.
+
+The slot travels as `colorIndex` in `init`, `presence` and `presence-sync`.
+
+The slot rather than a hex is authoritative because it indexes the creator theme's
+`--sjs2-color-utility-user-{bg,fg-on,border}-color-N` token family: the family
+follows the theme's palette and carries a legible foreground per slot, neither of
+which a raw hex can do. Every renderer — avatar chips, focus rings, name badges,
+mouse cursors — must resolve that one slot, which is what keeps a participant the
+same color everywhere.
+
+`color` is `PRESENCE_PALETTE[colorIndex]` (see
+[`server/protocol.ts`](server/protocol.ts)), for clients that cannot resolve the
+token themselves. It mirrors the slot and must never disagree with it.
+
+A client that receives no `colorIndex` (an older or third-party server) MUST derive a
+slot from the `clientId` deterministically, so that every client arrives at the same
+slot for the same peer with no negotiation — and MUST use the *same* derivation on
+every surface it paints. The reference derivation is survey-creator-core's
+`presenceColorSlot`: FNV-1a over the `clientId`, modulo 10. Note it can land on the
+reserved `0` or the illegible `5`, which is one more reason for a server to stamp the
+slot itself.
 
 ### Client → server: `presence`
 
@@ -189,7 +217,7 @@ per client (token bucket, burst 100).
 ### Server → other clients: `presence`
 
 ```json
-{ "type": "presence", "peer": { "clientId": "3f2c8b9e-...", "name": "Maria", "color": "#e51a5f", "state": { "...": "opaque" } } }
+{ "type": "presence", "peer": { "clientId": "3f2c8b9e-...", "name": "Maria", "colorIndex": 1, "color": "#1570EF", "state": { "...": "opaque" } } }
 ```
 
 ### Server → newcomer: `presence-sync` (immediately after `init`)
@@ -199,7 +227,7 @@ roster on the same connection, right after `init` (ordering is guaranteed by the
 socket):
 
 ```json
-{ "type": "presence-sync", "peers": [ { "clientId": "...", "name": "Bob", "color": "#0b7bd0", "state": { } } ] }
+{ "type": "presence-sync", "peers": [ { "clientId": "...", "name": "Bob", "colorIndex": 2, "color": "#CA4FFB", "state": { } } ] }
 ```
 
 ### Server → remaining clients: `presence-leave` (on disconnect)

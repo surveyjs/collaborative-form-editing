@@ -23,7 +23,7 @@ receiver: plugin.apply(payload)          (echo-suppressed, idempotent)
 late joiner: {type:"init", seed, log} ─► creator.JSON = seed; plugin.apply(log)
 
 focus change ─► CollaborationPlugin.onStateChanged ─► {type:"presence", state} ─► server
-server: wrap {clientId, name, color, state} ─► broadcast {type:"presence", peer} to others
+server: wrap {clientId, name, colorIndex, color, state} ─► broadcast {type:"presence", peer} to others
 receiver: presence.upsertPeer(peer)      (the plugin renders the overlay itself)
 ```
 
@@ -44,7 +44,11 @@ receiver: presence.upsertPeer(peer)      (the plugin renders the overlay itself)
 
 The presence plugin owns both sides of presence: capturing the local state (tab, selection,
 property-grid focus, cursor) and rendering remote peers; `collab-client.ts` only ships the opaque
-state and feeds server-stamped `{clientId, name, color, state}` envelopes back into it.
+state and feeds server-stamped `{clientId, name, colorIndex, color, state}` envelopes
+back into it — rewriting `color` to the slot's live theme value, because the plugin's
+roster keeps only that one field and the focus ring, name badge and cursor all paint
+from it — and re-pushes the roster through `setParticipants` with the slot, which is
+what the avatar chips paint from.
 
 ## Run
 

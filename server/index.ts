@@ -244,8 +244,12 @@ function send(ws: WebSocket, msg: ServerToClient): void {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
 
+// The slot is the color identity clients paint with; the hex is its mirror.
+// Slot 0 (gray) is the fallback for an id with no slot, and is never assigned.
+const slotOf = (room: Room, id: string): number => room.colorSlots.get(id) ?? 0;
+
 const colorOf = (room: Room, id: string): string =>
-    PRESENCE_PALETTE[(room.colorSlots.get(id) ?? 0) % PRESENCE_PALETTE.length];
+    PRESENCE_PALETTE[slotOf(room, id)] ?? PRESENCE_PALETTE[0];
 
 const nameOf = (room: Room, id: string): string => room.names.get(id) ?? "Guest";
 
@@ -267,13 +271,20 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
     ws.on("pong", () => { ka.isAlive = true; });
 
     // Bootstrap: current seed + full log. Must precede any relayed record.
-    send(ws, { type: "init", clientId, color: colorOf(room, clientId), seed: room.seed, log: room.log });
+    send(ws, {
+        type: "init", clientId,
+        colorIndex: slotOf(room, clientId), color: colorOf(room, clientId),
+        seed: room.seed, log: room.log
+    });
     // Roster of everyone who already announced presence. Same socket right
     // after init, so ordering is guaranteed.
     if (room.presence.size > 0) {
         send(ws, {
             type: "presence-sync",
-            peers: [...room.presence].map(([id, state]) => ({ clientId: id, name: nameOf(room, id), color: colorOf(room, id), state }))
+            peers: [...room.presence].map(([id, state]) => ({
+                clientId: id, name: nameOf(room, id),
+                colorIndex: slotOf(room, id), color: colorOf(room, id), state
+            }))
         });
     }
 
@@ -306,7 +317,10 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
             tokens -= 1;
             // Latest state only, never in the log.
             setPresence(room, clientId, msg.state);
-            const peerEntry = { clientId, name: nameOf(room, clientId), color: colorOf(room, clientId), state: msg.state };
+            const peerEntry = {
+                clientId, name: nameOf(room, clientId),
+                colorIndex: slotOf(room, clientId), color: colorOf(room, clientId), state: msg.state
+            };
             for (const [otherId, peer] of room.clients) {
                 if (otherId !== clientId) send(peer, { type: "presence", peer: peerEntry });
             }

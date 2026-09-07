@@ -64,7 +64,13 @@ export type ClientToServer = IAppendMsg | IPresenceMsg;
 export interface IInitMsg {
     type: "init";
     clientId: string;
-    /** This client's presence color, server-assigned from PRESENCE_PALETTE. */
+    /**
+     * This client's presence color slot, one of PRESENCE_COLOR_SLOTS.
+     * Optional on the wire: a server without the presence extension omits it
+     * and the client derives the slot from `clientId` instead.
+     */
+    colorIndex?: number;
+    /** The slot's hex, `PRESENCE_PALETTE[colorIndex]`. See the palette's note. */
     color: string;
     seed: unknown;
     log: unknown[];
@@ -85,13 +91,40 @@ export interface IRecordMsg {
 // Presence (ephemeral — never enters the room log)
 
 /**
- * Presence colors. The server assigns each connection the lowest palette slot
- * not held by another client in the room (wrapping with modulo if exhausted),
- * so colors are stable and collision-free per room.
+ * Presence colors. `colorIndex` is the wire value and the single source of
+ * truth: it is the slot of the creator theme's
+ * --sjs2-color-utility-user-{bg,fg-on,border}-color-N token family, so every UI
+ * surface (avatars, focus rings, name badges, mouse cursors) paints the same
+ * peer the same color.
+ *
+ * The slots a server may assign, in assignment order. Deliberately NOT 1..9:
+ * two of the ten theme slots are unusable for a peer.
+ *  - 0 is the neutral "unknown peer" gray, reserved as a client-side fallback.
+ *  - 5 (#F9C50B yellow) is the only slot the theme pairs with a DARK foreground
+ *    (--sjs2-color-utility-user-fg-on-color-5). The creator's name badge and
+ *    cursor pill draw white text unconditionally, so a peer on slot 5 would be
+ *    illegible there. One slot buys legibility on every surface.
+ *
+ * The server hands each connection the first slot in this set not held by
+ * another client in the room, so colors are stable and collision-free per room.
+ */
+export const PRESENCE_COLOR_SLOTS: readonly number[] = [1, 2, 3, 4, 6, 7, 8, 9];
+
+/**
+ * The same palette flattened to raw hex and indexed BY SLOT (hence entries for
+ * the never-assigned 0 and 5 too - `PRESENCE_PALETTE[slot]` must never go out
+ * of range). Carried in the `color` field for clients that cannot resolve the
+ * slot themselves.
+ *
+ * INVARIANT: these MUST stay equal to survey-core's
+ * `baseTheme.cssVariables["--sjs2-color-utility-user-bg-color-N"]`. A themed
+ * client paints the token; a client that cannot read it paints this array, and
+ * the two must land on the same pixel. An e2e test enforces the equality.
  */
 export const PRESENCE_PALETTE: readonly string[] = [
-    "#e51a5f", "#0b7bd0", "#1e8a4f", "#b78600", "#7a3fd1",
-    "#d1571e", "#0a8f8f", "#c2185b", "#5567d3", "#6a8a1e"
+    "#808080", // slot 0 — unknown peer, never assigned
+    "#1570EF", "#CA4FFB", "#19B35C", "#19B394", "#F9C50B",
+    "#F99130", "#F1529C", "#02ADEB", "#4E6198"
 ];
 
 /** The server silently drops presence frames larger than this many bytes. */
@@ -118,7 +151,13 @@ export interface IPresencePeerEntry {
     clientId: string;
     /** Display name from the connection URL's `?name=` param, sanitized by the server. */
     name: string;
-    /** Hex color from PRESENCE_PALETTE, server-assigned. */
+    /**
+     * Presence color slot, server-assigned - what every surface paints from.
+     * Optional for the same reason as `IInitMsg.colorIndex`, and because this
+     * type also describes what a client parses off the wire.
+     */
+    colorIndex?: number;
+    /** The slot's hex, `PRESENCE_PALETTE[colorIndex]`. See the palette's note. */
     color: string;
     /** The last presence state this peer sent. */
     state: unknown;

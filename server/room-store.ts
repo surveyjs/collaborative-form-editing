@@ -8,6 +8,7 @@
  * client, and TTL garbage-collection of empty rooms.
  */
 import type { WebSocket } from "ws";
+import { PRESENCE_COLOR_SLOTS } from "./protocol.js";
 
 export interface Room {
     id: string;
@@ -59,11 +60,17 @@ export function addClient(room: Room, clientId: string, ws: WebSocket): void {
     }
 }
 
-/** Lowest color slot not held by a connected client; a leaver's slot is reusable. */
+/**
+ * First slot in PRESENCE_COLOR_SLOTS not held by a connected client; a leaver's
+ * slot is reusable. Past capacity the room repeats a color rather than hand out
+ * a slot outside the set, which would render a peer gray or illegible.
+ */
 export function assignColorSlot(room: Room, clientId: string): number {
     const taken = new Set(room.colorSlots.values());
-    let slot = 0;
-    while (taken.has(slot)) slot++;
+    const free = PRESENCE_COLOR_SLOTS.find((slot) => !taken.has(slot));
+    // colorSlots.size is the count of clients already holding one (addClient
+    // does not touch it), so the wrap is deterministic.
+    const slot = free ?? PRESENCE_COLOR_SLOTS[room.colorSlots.size % PRESENCE_COLOR_SLOTS.length];
     room.colorSlots.set(clientId, slot);
     return slot;
 }
