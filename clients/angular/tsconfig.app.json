@@ -5,5 +5,5 @@
         "types": []
     },
     "files": ["src/main.ts"],
-    "include": ["src/**/*.d.ts", "../../shared/**/*.ts"]
+    "include": ["src/**/*.d.ts", "../../shared/collab-client.ts", "../../shared/shipping-address.ts"]
 }

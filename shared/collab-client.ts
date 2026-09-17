@@ -104,6 +104,47 @@ export interface ICreatorLike {
      * connectCollab() runs before render() in three of the four clients.
      */
     readonly rootElement?: HTMLElement | null;
+    /** Designer survey. Present after the creator is constructed. */
+    survey?: ISurveyForFirstRendering;
+}
+
+/**
+ * `CollaborationPlugin.apply()` inserts via `elements.splice` → `onAddElement`.
+ * `Page.addElement()` calls `element.onFirstRendering()` when the page is
+ * already painted; splice does not. A composite `contentPanel` then keeps
+ * `wasRendered === false` and `rows === []`, so nested content is empty until
+ * a later `addElement` (for example a move). Match addElement here.
+ */
+interface IRenderableElement {
+    wasRendered?: boolean;
+    onFirstRendering?(): void;
+    contentPanel?: IRenderableElement;
+}
+
+interface ISurveyForFirstRendering {
+    getAllQuestions?(): IRenderableElement[];
+    pages?: IRenderableElement[];
+}
+
+function ensureFirstRenderingAfterApply(creator: ICreatorLike): void {
+    const survey = creator.survey;
+    if (!survey) return;
+    const render = (el: IRenderableElement | undefined): void => {
+        if (!el) return;
+        if (el.wasRendered === false) el.onFirstRendering?.();
+        if (el.contentPanel && el.contentPanel.wasRendered === false) {
+            el.contentPanel.onFirstRendering?.();
+        }
+    };
+    for (const page of survey.pages ?? []) render(page);
+    for (const question of survey.getAllQuestions?.() ?? []) render(question);
+}
+
+function scheduleFirstRenderingAfterApply(creator: ICreatorLike): void {
+    ensureFirstRenderingAfterApply(creator);
+    if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => ensureFirstRenderingAfterApply(creator));
+    }
 }
 
 export type CollabStatus = "connecting" | "connected" | "closed";
@@ -431,6 +472,7 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
                 for (const record of msg.log) recordHistory(record);
                 emitHistory();
             }
+            scheduleFirstRenderingAfterApply(creator);
             ready = true;
             opts.onStatus?.("connected");
             // Announce ourselves so existing occupants see the newcomer at once.
@@ -439,6 +481,7 @@ export function connectCollab(opts: ICollabOptions): ICollabConnection {
             plugin.apply(msg.payload);
             recordHistory(msg.payload);
             emitHistory();
+            scheduleFirstRenderingAfterApply(creator);
         } else if (msg.type === "presence-sync") {
             const peers = Array.isArray(msg.peers) ? (msg.peers as IPresencePeerEntry[]).filter(isPeerEntry) : [];
             // A sync REPLACES the roster, so anyone missing from it is gone.
