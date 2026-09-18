@@ -95,25 +95,3 @@ export function registerShippingAddress(deps: {
         }
     });
 }
-
-export function ensureShippingAddressInToolbox(creator: {
-    toolbox?: {
-        getItemByName?(name: string): unknown;
-        addItem(item: object): unknown;
-    };
-}): void {
-    const toolbox = creator.toolbox;
-    if (!toolbox) return;
-    try {
-        if (toolbox.getItemByName?.(SHIPPING_ADDRESS_TYPE)) return;
-        toolbox.addItem({
-            name: SHIPPING_ADDRESS_TYPE,
-            title: "Shipping Address",
-            iconName: "icon-composite",
-            category: "general",
-            json: { type: SHIPPING_ADDRESS_TYPE }
-        });
-    } catch {
-        // Toolbox shape differs across versions; ComponentCollection registration is enough.
-    }
-}

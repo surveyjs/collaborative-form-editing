@@ -8,7 +8,7 @@ import { CollaborationPlugin } from "survey-creator-core/collaboration";
 import SurveyThemes from "survey-core/themes";
 import { SurveyCreatorComponent } from "survey-creator-vue";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
-import { ensureShippingAddressInToolbox, registerShippingAddress } from "../../../shared/shipping-address";
+import { registerShippingAddress } from "../../../shared/shipping-address";
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 import "survey-creator-core/collaboration.css";
@@ -47,7 +47,6 @@ if (!roomId) {
         onBack: () => { location.href = "/"; }
     });
     creator.addPlugin("collaboration", collab);
-    ensureShippingAddressInToolbox(creator);
 
     connectCollab({
         creator, collab, roomId,

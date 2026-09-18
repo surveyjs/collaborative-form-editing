@@ -14,7 +14,7 @@ import { CollaborationPlugin } from "survey-creator-core/collaboration";
 import SurveyThemes from "survey-core/themes";
 import { SurveyCreator } from "survey-creator-js";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
-import { ensureShippingAddressInToolbox, registerShippingAddress } from "../../../shared/shipping-address";
+import { registerShippingAddress } from "../../../shared/shipping-address";
 
 // Baked in at build time from the environment (see envPrefix in vite.config.ts).
 if (import.meta.env.SURVEYJS_LICENSE_KEY) slk(import.meta.env.SURVEYJS_LICENSE_KEY);
@@ -46,7 +46,6 @@ if (!roomId) {
         onBack: () => { location.href = "/"; }
     });
     creator.addPlugin("collaboration", collab);
-    ensureShippingAddressInToolbox(creator);
 
     connectCollab({
         creator, collab, roomId,
