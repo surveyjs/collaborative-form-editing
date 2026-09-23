@@ -128,7 +128,7 @@ two-tab live sync for each of the four frameworks, one room open in all four fra
 at once, late-joiner bootstrap (seed + log replay), room isolation, and WS auto-creation.
 
 Protocol-level unit coverage lives with the plugin itself, upstream in the
-`survey-creator` repo (`packages/survey-creator-core/tests/journal*.tests.ts`) — a local
+`survey-creator` repo (`packages/survey-creator-core/tests-collaboration/`) — a local
 checkout of it is not part of this project's setup.
 
 ## Environment

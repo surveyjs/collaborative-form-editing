@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { createApp, h } from "vue";
-import { slk } from "survey-core";
+import { slk, ComponentCollection, Serializer } from "survey-core";
 import { SurveyCreatorModel, registerCreatorTheme } from "survey-creator-core";
 // Collaboration ships as its own bundle - the default creator carries
 // neither its JS nor its CSS.
@@ -8,6 +8,7 @@ import { CollaborationPlugin } from "survey-creator-core/collaboration";
 import SurveyThemes from "survey-core/themes";
 import { SurveyCreatorComponent } from "survey-creator-vue";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
+import { registerShippingAddress } from "../../../shared/shipping-address";
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 import "survey-creator-core/collaboration.css";
@@ -18,6 +19,7 @@ import "survey-creator-core/i18n";
 
 // Baked in at build time from the environment (see envPrefix in vite.config.ts).
 if (import.meta.env.SURVEYJS_LICENSE_KEY) slk(import.meta.env.SURVEYJS_LICENSE_KEY);
+registerShippingAddress({ ComponentCollection, Serializer });
 
 // Only the light creator theme is registered out of the box; without a dark
 // variant of each theme the Light/Dark switch in the creator's theme settings
