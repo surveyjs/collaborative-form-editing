@@ -1,155 +1,152 @@
-# survey-creator-collaboration-v2
+# Collaborative Form Editing by SurveyJS
 
-Collaborative (multi-user) editing for SurveyJS Creator, built on the **journal plugin**
-(`CollaborationPlugin` from `survey-creator-core`): every local edit becomes a small JSON
-*record*; peers apply the record stream and converge (last write wins, no CRDT/OT).
+This app lets several people edit the same form in [SurveyJS Creator](https://surveyjs.io/open-source). Participants can use React, Angular, Vue, or plain JavaScript clients in the same room and see each other's changes in real time.
 
-Four client apps share one framework-agnostic collab module and one relay server:
+[Open the Online Demo](https://collaborative-form-editing.demos.surveyjs.io/)
 
-| URL | App |
-|---|---|
-| `/` | Lobby — pick a framework, enter/create a room |
-| `/react/?room=<id>` | React 18 + `survey-creator-react` |
-| `/angular/?room=<id>` | Angular 18 + `survey-creator-angular` |
-| `/vue/?room=<id>` | Vue 3 + `survey-creator-vue` |
-| `/js/?room=<id>` | Plain JS + `survey-creator-js` |
+## Try It Locally
 
-## Architecture
-
-```
-Creator edit ─► CollaborationPlugin.onRecordAdded/Changed ─► {type:"append", payload} ─► server
-server: room.log.push(payload) ─► broadcast {type:"record", from, payload} to other clients
-receiver: plugin.apply(payload)          (echo-suppressed, idempotent)
-late joiner: {type:"init", seed, log} ─► creator.JSON = seed; plugin.apply(log)
-
-focus change ─► CollaborationPlugin.onStateChanged ─► {type:"presence", state} ─► server
-server: wrap {clientId, name, colorIndex, color, state} ─► broadcast {type:"presence", peer} to others
-receiver: presence.upsertPeer(peer)      (the plugin renders the overlay itself)
-```
-
-- **`PROTOCOL.md`** — the language-agnostic protocol specification. The Node server in
-  [`server/`](server/) is a *reference implementation*: records and survey JSON are opaque
-  to it, it has **no SurveyJS dependency**, and it is intentionally trivial to port to
-  Go/.NET/Java/Python (room = `{seed, log[], clients}`, four operations, in-memory + TTL GC).
-- **`shared/collab-client.ts`** — the one collab module all four clients use. It has zero
-  imports (structural typing + injection) so each differently-bundled app compiles it
-  against its *own* copy of `survey-creator-core`.
-- **`lobby/`** — a small React app whose form is *itself a SurveyJS survey* rendered
-  with `survey-react-ui`. Empty room id → random room with an empty survey; a new room
-  id → textarea for the initial survey JSON (the seed); an existing room id → join.
-  Invite links (`/?room=<id>`) prefill the room field.
-- **`clients/*`** — four independent apps (each with its own `package.json`/lockfile; no
-  npm workspaces on purpose). The survey packages come from npm (`^3.0.1`) — including
-  `CollaborationPlugin`, which ships in `survey-creator-core/collaboration`.
-
-The presence plugin owns both sides of presence: capturing the local state (tab, selection,
-property-grid focus, cursor) and rendering remote peers; `collab-client.ts` only ships the opaque
-state and feeds server-stamped `{clientId, name, colorIndex, color, state}` envelopes
-back into it — rewriting `color` to the slot's live theme value, because the plugin's
-roster keeps only that one field and the focus ring, name badge and cursor all paint
-from it — and re-pushes the roster through `setParticipants` with the slot, which is
-what the avatar chips paint from.
-
-## Run
-
-Node **20.11+** required (Angular 18). From a bare checkout:
+Use Node.js 20.11 or later. From the repository root, install the dependencies and start the app:
 
 ```bash
-npm install    # server deps, then lobby + the four clients (postinstall)
-npm start      # builds lobby + all 4 clients, then serves everything on :8080
+npm install
+npm start
 ```
 
-`npm install` runs `install:clients` as `postinstall`, so a fresh clone needs nothing else
-— every survey package, `CollaborationPlugin` included, comes from npm.
+Installation includes the server, lobby, and all four clients. `npm start` builds the lobby and clients, then serves the app at [localhost:8080](http://localhost:8080).
 
-Open http://localhost:8080, create a room, open the same room in another tab/browser
-(any framework) — edits sync live.
+In the lobby, choose a framework and enter a room ID. A new room ID lets you provide the initial survey JSON; an existing ID joins that room. Leave the ID empty to create a random room with an empty survey.
 
-Dev loop for one client (Vite/ng dev server with /api and /ws proxy to :8080):
+![Collaborative Form Editing with SurveyJS - Lobby page](./.github/assets/collaborative-editing-lobby.png)
 
-```bash
-npm run server            # terminal 1: relay + lobby + built clients
-npm run dev:react         # terminal 2: lobby | react | vue | js | angular
+Once you join, click **Invite** to copy a link for another participant. To try collaboration on your own, open the link in a second browser tab.
+
+![Collaborative Form Editing with SurveyJS - Copy invite link](./.github/assets/collaborative-editing-invite-link.png)
+
+As participants edit the form, everyone can see their modifications, which questions they are working on, and where their cursors are.
+
+![Collaborative Form Editing with SurveyJS](./.github/assets/collaborative-editing.png)
+
+## How It Works
+
+Each client uses `CollaborationPlugin` from `survey-creator-core/collaboration` to turn local edits into JSON records. The shared [connection helper](shared/collab-client.ts) sends these records to the server and applies records received from other participants.
+
+The server keeps the initial survey JSON and an ordered log of edits for each room. It appends incoming records and forwards them to the other clients. When someone joins later, their client loads the initial survey and replays the log to reach the current state. The plugin resolves conflicts using the last change.
+
+The plugin also captures each participant's active tab, selection, property focus, and cursor. The connection helper relays this presence information so that the plugin can show where others are working.
+
+The [reference server](server/) has no SurveyJS dependency and does not interpret survey JSON or edit records. [PROTOCOL.md](PROTOCOL.md) describes how to implement a compatible server in another language.
+
+### Limitations
+
+- Rooms are stored in memory and lost when the server restarts.
+- Empty rooms are deleted after a configurable delay, which defaults to 30 minutes.
+- The JSON editor tab uses a plain text area because the optional `ace-builds` package is not installed.
+
+## Use the Collaboration Plugin
+
+Create a Survey Creator instance, attach `CollaborationPlugin`, and connect it to a room. This React example uses this repository's `connectCollab` helper; the import path matches [clients/react/src/main.tsx](clients/react/src/main.tsx). It assumes the page contains an element with `id="root"`.
+
+```tsx
+import { createRoot } from "react-dom/client";
+import { SurveyCreator, SurveyCreatorComponent } from "survey-creator-react";
+import { CollaborationPlugin } from "survey-creator-core/collaboration";
+import { connectCollab } from "../../../shared/collab-client";
+import "survey-core/survey-core.css";
+import "survey-creator-core/survey-creator-core.css";
+import "survey-creator-core/collaboration.css";
+
+const roomId = "demo";
+const creator = new SurveyCreator({});
+const collab = new CollaborationPlugin(creator, {
+  roomId,
+  framework: "React",
+  getInviteLink: () => `${location.origin}/?room=${encodeURIComponent(roomId)}`,
+});
+creator.addPlugin("collaboration", collab);
+
+const connection = connectCollab({
+  creator,
+  collab,
+  roomId,
+  name: "Ann",
+  onStatus: (status) => collab.setStatus(status),
+  onHistoryChanged: (changes) => collab.setHistory(changes),
+});
+
+createRoot(document.getElementById("root")!).render(
+  <SurveyCreatorComponent creator={creator} />
+);
 ```
 
-## Developing against local survey builds
+The helper opens the WebSocket connection, loads the room's initial survey and edit log, and exchanges edits and presence updates. Call `connection.dispose()` when removing the editor to close the connection and remove its event handlers.
 
-To work on the collaboration plugin itself, every app has a `:local` variant that resolves
-`survey-*` to the sibling `../survey-library` and `../survey-creator` **`build/`** dirs
-instead of the npm copies:
+SurveyJS Creator is a commercial product. See [Configuration](#configuration) for license setup.
+
+## Development
+
+### Work on a Client
+
+After the initial build, run the server in one terminal:
 
 ```bash
-npm run dev:react:local     # or build:react:local, build:clients:local
-npm run dev:react:watch     # same, plus `watch:dev` in the survey packages via concurrently
-npm run typecheck:local     # inside an app: typecheck against the local .d.ts
+npm run server
 ```
 
-Build the packages in the sibling checkouts first (`npm run build:all` for `survey-core`
-and `survey-creator-core`, `npm run build` for the rest). All ten must be built **at the
-same version** — a mismatched or partial set throws with the list of offenders rather than
-silently mixing local and npm copies of the same library. Set `SURVEYJS_LIBV3` in the root
-`.env` if the checkouts do not live next to this repo.
-
-The aliases are derived from each package's `exports` map
-([`scripts/local-survey-alias.mjs`](scripts/local-survey-alias.mjs)) rather than pointing at
-the `build/` dir as a whole: a plain directory alias bypasses `exports`, so subpaths like
-`survey-core/themes` and `survey-creator-core/collaboration` would land on the CJS bundles,
-which pull in a second copy of the library (two `Serializer` singletons). The sibling repo
-`theme-adapter-demos` uses the same alias approach for the same reason, and can get away
-with plain directory aliases only because it imports no JS subpaths.
-
-The Angular client goes through `--configuration local` and
-[`clients/angular/tsconfig.local.json`](clients/angular/tsconfig.local.json) instead — the
-esbuild builder honours tsconfig `paths` for both type checking and bundling. Static paths
-cannot run the check above, so an npm pre-hook
-([`scripts/check-local-survey.mjs`](scripts/check-local-survey.mjs)) does it instead; the
-same hook guards `typecheck:local`. That table is hand-kept, so a newly imported subpath
-falls back to the npm copy until it is added. To confirm which copy you actually got, check
-the version marker in the bundle:
+In another terminal, start the client you want to edit:
 
 ```bash
-grep -ohE '"3\.[0-9]+\.[0-9]+"' clients/react/dist/assets/*.js | sort -u
+npm run dev:react
 ```
 
-`survey-angular-ui` and `survey-creator-angular` ship no watch script (ng-packagr), so
-`dev:angular:watch` only watches `survey-core` and `survey-creator-core`; rebuild those two
-by hand after editing them.
+Replace `react` with `lobby`, `vue`, `js`, or `angular` as needed. The development server forwards API and WebSocket requests to the server on port `8080`.
 
-## Tests
+### Work on the Collaboration Plugin
+
+Normal builds use npm packages. To develop against local SurveyJS source, place `survey-library` and `survey-creator` checkouts next to this repository and build their packages first. Use `npm run build:all` for `survey-core` and `survey-creator-core`, and `npm run build` for the other packages.
+
+All ten packages listed in [`local-survey-alias.mjs`](scripts/local-survey-alias.mjs) must be built at the same version. The local scripts report missing or mismatched builds instead of mixing them with npm packages.
+
+Use the `:local` scripts to run or build a client against those packages:
 
 ```bash
-npx playwright install chromium   # once
-npm run build:clients             # e2e runs against the built bundles
+npm run dev:react:local
+npm run build:react:local
+npm run build:clients:local
+```
+
+For automatic rebuilding while editing the SurveyJS packages, use `npm run dev:react:watch`. Equivalent scripts are available for the other clients. The Angular watch script watches only `survey-core` and `survey-creator-core`; rebuild `survey-angular-ui` and `survey-creator-angular` manually after editing them.
+
+Set `SURVEYJS_LIBV3` in the root `.env` file if the checkouts are elsewhere. Angular uses fixed paths in [`tsconfig.local.json`](clients/angular/tsconfig.local.json), so that variable does not change its paths.
+
+### Run Tests
+
+Install Chromium once, build the clients, and run the browser tests:
+
+```bash
+npx playwright install chromium
+npm run build:clients
 npm run test:e2e
 ```
 
-The suite covers the lobby flows (random room, seed form, invalid JSON, existing room),
-two-tab live sync for each of the four frameworks, one room open in all four frameworks
-at once, late-joiner bootstrap (seed + log replay), room isolation, and WS auto-creation.
+The suite checks room creation and joining, live editing across all four frameworks, log replay for new participants, and room isolation.
 
-Protocol-level unit coverage lives with the plugin itself, upstream in the
-`survey-creator` repo (`packages/survey-creator-core/tests-collaboration/`) — a local
-checkout of it is not part of this project's setup.
+The plugin's unit tests are in `survey-creator/packages/survey-creator-core/tests-collaboration/`. That checkout is not required to run this app.
 
-## Environment
+## Configuration
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `PORT` | `8080` | HTTP/WS port |
-| `HOST` | `localhost` | Bind address |
-| `EMPTY_ROOM_TTL_MS` | `1800000` (30 min) | How long an empty room lives before GC |
-| `SURVEYJS_LICENSE_KEY` | — | SurveyJS Creator license key, baked into the client bundles **at build time** (`npm run build:clients` / `npm start`). Set it either in a `.env` file at the repo root (copy `.env.example`; gitignored) or via docker compose `environment:` — a real environment variable wins over `.env`. Vite clients read `.env` through `envDir`/`envPrefix`, the Angular client through `scripts/gen-license-key.mjs` (npm pre-hook). |
-| `SURVEYJS_LIBV3` | — | Only for the `:local` scripts: where the `survey-library` and `survey-creator` checkouts live, if not right next to this repo. Absolute, or relative to the repo root. Same variable as in `theme-adapter-demos`. Has no effect on the Angular client, whose `tsconfig.local.json` paths are static. |
+Set the Survey Creator license key in a root `.env` file, using [`.env.example`](./.env.example) as a starting point, or through the environment. Environment variables take precedence over `.env`. The key is included in client bundles at build time, so rebuild the clients after changing it.
 
-## Notes & caveats
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `PORT` | `8080` | HTTP and WebSocket port |
+| `HOST` | `localhost` | Server bind address |
+| `EMPTY_ROOM_TTL_MS` | `1800000` (30 minutes) | Delay before deleting an empty room, in milliseconds |
+| `SURVEYJS_LICENSE_KEY` | None | SurveyJS Creator license key |
+| `SURVEYJS_LIBV3` | Repository's parent directory | Directory containing the local SurveyJS checkouts; absolute or relative to this repository. Used by `:local` scripts, except Angular's fixed paths. |
 
-- The server appends *every* incoming record, including coalesced re-sends of the same
-  logical record (rapid typing); replaying the log in order converges because the applier
-  is last-write-wins. Do not deduplicate by `payload.seq` — it is per-client.
-- Room state is memory-only by design; a server restart loses rooms (see `PROTOCOL.md`
-  for what a persistent port would need to keep).
-- `resolve.dedupe` in the Vite configs is load-bearing, not cosmetic: survey-core's
-  `Serializer` is a singleton, and in `:local` mode the aliased sibling builds sit next to
-  their own React 17 / Vue copies that would otherwise be pulled in alongside the app's.
-- The clients enable `showJSONEditorTab`, but `ace-builds` (an optional peer of
-  `survey-creator-core`) is not installed, so the JSON tab uses the plain textarea editor.
+## Related Resources
+
+- [SurveyJS Website](https://surveyjs.io/)
+- [SurveyJS Documentation](https://surveyjs.io/documentation)
+- [What's New in SurveyJS](https://surveyjs.io/WhatsNew)
