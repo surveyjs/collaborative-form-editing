@@ -1,273 +1,144 @@
-# Collaboration Server Protocol
+# Collaborative Form Editing Protocol
 
-A language-agnostic specification of the server side of collaborative Survey Creator
-editing. The Node.js server in [`server/`](server/) is a *reference implementation*;
-the protocol is designed so that a production server can be written in any
-language/framework (Go, .NET, Java, Python, ...) without depending on any SurveyJS
-package.
+This document describes the server protocol used by the SurveyJS Creator collaboration plugin. The [Node.js server](server/) is a reference implementation with no SurveyJS dependency and can be ported to other languages.
 
-## Core idea
+## Room State
 
-Clients run the SurveyJS Creator with the **journal plugin**, which turns every local
-edit into a small JSON value called a *record*. The server never inspects records — it
-treats them as **opaque JSON** ("store and forward as is"). All convergence logic lives
-in the clients: applying an ordered stream of records is idempotent and last-write-wins,
-so every client that receives the same seed and the same record sequence ends up with
-the same survey.
+Each room holds its initial survey JSON (`seed`), an ordered list of edit records (`log`), and its connected clients. The server stores and forwards the survey JSON and records without interpreting their contents.
 
-The server's entire job:
+The collaboration plugin turns local edits into records and applies records received from other participants. Applying the same initial survey and record sequence produces the same result, with the last change winning for each survey property.
 
-1. Keep a set of **rooms**. A room is: `{ id, seed, log, clients }`
-   - `seed` — the initial survey JSON (opaque), set at room creation.
-   - `log` — an append-only array of records (opaque JSON values) in **arrival order**.
-   - `clients` — the currently connected WebSocket clients, each with a server-assigned id.
-2. When a client connects: send it `seed` + the whole `log` (the `init` message).
-3. When a client sends a record: append it to `log` and broadcast it to **every other**
-   client in the room (never echo it back to the sender).
-4. Garbage-collect rooms that stay empty longer than a TTL.
+## Create or Find a Room
 
-That is all. No locks, no diffing, no record inspection, no persistence required
-(in-memory storage is acceptable; persistence is an implementation choice).
+Clients choose a room ID and can create a room through HTTP before connecting. The server assigns a separate client ID to each WebSocket connection.
 
-## Identifiers
+| Identifier | Rules |
+| --- | --- |
+| Room ID | Must match `^[A-Za-z0-9_-]{1,64}$`. Invalid IDs receive HTTP `400` or a refused WebSocket upgrade. |
+| Client ID | A unique string assigned by the server for each connection. Used in `init` and to identify the sender of relayed records. |
+| Display name | Read from `?name=`, trimmed, and limited to 32 Unicode code points. Missing or empty names become `Guest`. |
 
-- **Room id**: chosen by clients. MUST match `^[A-Za-z0-9_-]{1,64}$`. Anything else is
-  rejected with HTTP 400 / WS close.
-- **Client id**: assigned by the server on each WebSocket connection (any unique string;
-  the reference implementation uses a UUID). Sent to the client in `init` and used as
-  `from` in relayed messages.
+The HTTP API lets clients check whether a room exists or create one with an initial survey:
 
-## HTTP API
+| Method | Path | Response |
+| --- | --- | --- |
+| `GET` | `/health` | `200 {"ok":true}` |
+| `GET` | `/api/rooms/{roomId}` | `200 {roomId, exists:true, clientCount, logLength}`, `404 {exists:false}`, or `400` for an invalid ID |
+| `POST` | `/api/rooms` | `201 {roomId}`, `409` if the room exists, or `400` for an invalid ID or malformed JSON |
 
-All responses are JSON, UTF-8. CORS: permissive (`Access-Control-Allow-Origin: *`) —
-tighten in production as needed.
+To create a room, send `{ roomId, seed? }`. The `seed` is the initial survey JSON and defaults to `{}`. A `409` response leaves the existing room's seed and log unchanged; the client can join that room instead.
 
-### `GET /api/rooms/{roomId}`
+Responses use UTF-8 JSON. The reference server allows requests from any origin with `Access-Control-Allow-Origin: *`.
 
-Room existence probe (used by the lobby while the user types a room id).
+## Connect and Exchange Edits
 
-- `200 OK` — room exists:
+Connect to `ws(s)://host/ws/rooms/{roomId}?name={displayName}`. Each connection represents one participant in one room. If the room does not exist, the server must create it with an empty seed (`{}`).
 
-  ```json
-  { "roomId": "demo1", "exists": true, "clientCount": 2, "logLength": 17 }
-  ```
+Each message is a JSON object sent as a text frame. Unknown message types must be ignored. The server silently ignores malformed JSON and `append` messages with a missing or null `payload`.
 
-- `404 Not Found` — room does not exist:
+### Initial State
 
-  ```json
-  { "exists": false }
-  ```
-
-- `400 Bad Request` — invalid room id.
-
-### `POST /api/rooms`
-
-Create a room with an initial state.
-
-Request body:
-
-```json
-{ "roomId": "demo1", "seed": { "pages": [ ... ] } }
-```
-
-- `roomId` — required, validated as above.
-- `seed` — optional initial survey JSON (opaque to the server). Defaults to `{}`.
-
-Responses:
-
-- `201 Created` — `{ "roomId": "demo1" }`
-- `409 Conflict` — room already exists (its seed/log are NOT touched). Clients treat
-  this as "someone created it concurrently — just join".
-- `400 Bad Request` — invalid id or malformed JSON body.
-
-### `GET /health`
-
-`200 OK` — `{ "ok": true }`. Liveness probe.
-
-## WebSocket: `ws(s)://host/ws/rooms/{roomId}?name={displayName}`
-
-One connection = one participant in one room. If the room does not exist when a client
-connects, the server MUST auto-create it with seed `{}` (this keeps pasted deep links
-working).
-
-`name` is the participant's display name (part of the presence extension). The server
-sanitizes it: trim, cut to 32 characters (`PRESENCE_NAME_MAX`), and substitute `"Guest"`
-when missing or empty. The server stamps the name onto every relayed presence envelope,
-so it never travels inside the presence state itself.
-
-All messages are single JSON objects (text frames). Unknown message types MUST be
-ignored (forward compatibility).
-
-### Server → client: `init` (sent once, immediately after connect)
+The server sends `init` immediately after connecting:
 
 ```json
 {
   "type": "init",
-  "clientId": "3f2c8b9e-...",
+  "clientId": "client-1",
   "colorIndex": 1,
   "color": "#1570EF",
-  "seed": { },
-  "log": [ { "v": 1, "seq": 1, "...": "opaque record" }, ... ]
+  "seed": {},
+  "log": []
 }
 ```
 
-`colorIndex` and `color` are part of the optional presence extension (see below);
-servers that don't implement presence may omit them, and clients must treat them as
-optional.
+The client loads `seed` into the Creator, then applies every record in `log` in array order. The example shows a room with no edits yet. The color fields belong to the optional presence extension and may be omitted by servers that do not support it.
 
-The client bootstraps from it: set the creator's survey to `seed`, then apply every
-entry of `log` in array order. The server MUST NOT send any `record` message to a
-client before its `init`.
+The server must send `init` before any `record` messages. Register the client and send the snapshot as one operation, so no edit is lost or delivered out of order between the snapshot and subsequent updates.
 
-### Client → server: `append`
+### Edit Records
+
+When a local record is added or updated, the client sends an `append` message. The `payload` below is a placeholder for a plugin record:
 
 ```json
 { "type": "append", "payload": { "...": "opaque record" } }
 ```
 
-The server appends `payload` to the room log and broadcasts it to all other clients.
-Messages that are not valid JSON, have a different `type`, or lack `payload` are
-silently ignored.
-
-Note: clients may re-send an *updated version* of a previously sent record (the journal
-plugin coalesces rapid typing into one record and re-emits it). The server does NOT
-deduplicate — it appends every `append` as a new log entry. Replaying such a log
-converges because the applier is last-write-wins. Consequence: never key or deduplicate
-log entries by any field inside `payload` (e.g. `seq` — it is per-client and not unique
-across clients).
-
-### Server → other clients: `record`
+The server appends the payload to the room's log and forwards it to every other participant:
 
 ```json
-{ "type": "record", "from": "3f2c8b9e-...", "payload": { "...": "opaque record" } }
+{ "type": "record", "from": "client-1", "payload": { "...": "opaque record" } }
 ```
 
-- `from` — the clientId of the author. Receivers use it defensively to drop their own
-  echoes; the server must already exclude the sender from the broadcast.
-- Broadcast order SHOULD match log-append order (single-threaded room handling, as in
-  the reference implementation, gives this for free).
+Process each room's messages sequentially and broadcast records in log order. Never echo a record to its sender. The `from` field identifies the author, allowing clients to reject accidental echoes.
 
-## Presence (ephemeral extension)
+Append every record, including updated versions of earlier records. The plugin can combine rapid typing into one record and send it again when it changes. Do not deduplicate records or use a payload field as a unique log key: fields such as `seq` are local to each client. Applying the complete log in order handles these updates.
 
-An OPTIONAL extension that lets participants see each other: name, active tab,
-selected element, keyboard focus, mouse cursor. Servers and clients
-that don't implement it interoperate unchanged — all presence message types fall
-under the "unknown types MUST be ignored" rule, and `init.colorIndex` / `init.color`
-are additive.
+## Presence
 
-Principles:
+Presence is an optional extension that shows participants' names, active tabs, selections, keyboard focus, and cursors. Clients and servers without this extension can still exchange edits by ignoring its message types.
 
-- Presence is **ephemeral**: it NEVER enters the room log. The server stores only
-  the **latest** state per connected client and forgets it on disconnect.
-- Presence state is **opaque to the server** (like records). The state schema is a
-  creator-side convention: it is produced and consumed by survey-creator-core's
-  `CollaborationPlugin` (`IPresenceState`) — pure focus data (tab, selection, keyboard
-  focus, cursor), with no user identity inside.
-- **User identity lives in the envelope, not the state**: the server stamps
-  `clientId`, `name` (from the connection URL) and `colorIndex` (server-assigned,
-  plus its `color` mirror) onto every relayed peer entry.
-- Clients send their **full** state every time (not diffs) — any single message
-  fully re-establishes a participant, which makes reconnects self-healing.
+### Send and Receive State
 
-### Colors
-
-A peer's color is a **slot**, not a hex. The server assigns each connection the first
-slot in `PRESENCE_COLOR_SLOTS` — `1, 2, 3, 4, 6, 7, 8, 9`, in that order — not held by
-another client in the room; a leaver's slot becomes reusable, and past 8 occupants
-slots repeat. Two of the ten theme slots are never assigned:
-
-- `0` is the neutral gray a client paints for a peer whose slot it does not know;
-- `5` is the only slot the theme pairs with a *dark* foreground, and the creator's
-  name badge and cursor pill draw their text white unconditionally — a peer on slot 5
-  would be illegible there.
-
-The slot travels as `colorIndex` in `init`, `presence` and `presence-sync`.
-
-The slot rather than a hex is authoritative because it indexes the creator theme's
-`--sjs2-color-utility-user-{bg,fg-on,border}-color-N` token family: the family
-follows the theme's palette and carries a legible foreground per slot, neither of
-which a raw hex can do. Every renderer — avatar chips, focus rings, name badges,
-mouse cursors — must resolve that one slot, which is what keeps a participant the
-same color everywhere.
-
-`color` is `PRESENCE_PALETTE[colorIndex]` (see
-[`server/protocol.ts`](server/protocol.ts)), for clients that cannot resolve the
-token themselves. It mirrors the slot and must never disagree with it.
-
-A client that receives no `colorIndex` (an older or third-party server) MUST derive a
-slot from the `clientId` deterministically, so that every client arrives at the same
-slot for the same peer with no negotiation — and MUST use the *same* derivation on
-every surface it paints. The reference derivation is survey-creator-core's
-`presenceColorSlot`: FNV-1a over the `clientId`, modulo 10. Note it can land on the
-reserved `0` or the illegible `5`, which is one more reason for a server to stamp the
-slot itself.
-
-### Client → server: `presence`
+Clients send their full presence state each time, rather than partial changes:
 
 ```json
-{ "type": "presence", "state": { "tab": "designer", "sel": { "...": "..." }, "...": "opaque" } }
+{ "type": "presence", "state": { "tab": "designer" } }
 ```
 
-The server MUST: replace the stored state for this client, and broadcast it to all
-**other** clients wrapped in a `peer` entry (below). The server MUST NOT append it
-to the log. Recommended guards (reference implementation): silently drop frames
-larger than **4096 bytes** (`PRESENCE_MAX_BYTES`) and beyond ~50 messages/second
-per client (token bucket, burst 100).
+The plugin defines and interprets `state`. The server keeps only the latest state for each connected client and never adds presence to the edit log.
 
-### Server → other clients: `presence`
+To relay presence, the server adds the participant's identity and sends the result to every other client. Identity comes from the connection, not from the submitted state:
 
 ```json
-{ "type": "presence", "peer": { "clientId": "3f2c8b9e-...", "name": "Maria", "colorIndex": 1, "color": "#1570EF", "state": { "...": "opaque" } } }
+{
+  "type": "presence",
+  "peer": {
+    "clientId": "client-1",
+    "name": "Maria",
+    "colorIndex": 1,
+    "color": "#1570EF",
+    "state": { "tab": "designer" }
+  }
+}
 ```
 
-### Server → newcomer: `presence-sync` (immediately after `init`)
+The reference server silently drops presence messages larger than 4096 bytes. It also uses a token bucket per client, allowing 50 messages per second with a burst of 100.
 
-If any connected client has sent presence, the server sends the newcomer the whole
-roster on the same connection, right after `init` (ordering is guaranteed by the
-socket):
+### Join and Leave
+
+If any connected clients have sent presence, send their latest states to a new participant immediately after `init`, on the same connection:
 
 ```json
-{ "type": "presence-sync", "peers": [ { "clientId": "...", "name": "Bob", "colorIndex": 2, "color": "#CA4FFB", "state": { } } ] }
+{
+  "type": "presence-sync",
+  "peers": [
+    { "clientId": "client-2", "name": "Bob", "colorIndex": 2, "color": "#CA4FFB", "state": {} }
+  ]
+}
 ```
 
-### Server → remaining clients: `presence-leave` (on disconnect)
+When a participant disconnects, remove their stored presence and notify the remaining clients:
 
 ```json
-{ "type": "presence-leave", "clientId": "3f2c8b9e-..." }
+{ "type": "presence-leave", "clientId": "client-1" }
 ```
 
-Sent for every disconnecting client (even one that never sent presence — receivers
-ignore unknown ids). To catch dropped or half-open connections that never send a
-clean close, the server runs a WebSocket-level **ping/pong keepalive**: it pings
-each socket periodically (reference: every 30 s) and terminates any that fails to
-answer, which fires this same `presence-leave`. A browser answers pings at the
-WebSocket layer even in a throttled/backgrounded tab, so the reference client does
-**not** run its own timer-based staleness sweep — a JS-timer sweep would falsely
-drop an idle observer whose background tab throttled its heartbeat.
+Send this notification even if the participant never sent presence. Receivers ignore client IDs they do not know.
 
-## Room lifecycle
+### Participant Colors
 
-- Created by `POST /api/rooms` (explicit seed) or on first WS connect (seed `{}`).
-- When the last client disconnects, start a TTL timer (reference default: 30 minutes,
-  env `EMPTY_ROOM_TTL_MS`). If nobody reconnects before it fires, delete the room.
-  A reconnect cancels the timer.
-- Deleting a room loses its state; a later connect auto-creates a fresh empty one.
+The server assigns the first available slot from `1, 2, 3, 4, 6, 7, 8, 9`. Slots become available when participants leave and repeat after all eight are in use. Slot `0` is reserved for unknown peers; slot `5` is excluded because its background is unsuitable for the white text on name badges and cursors.
 
-## Ordering & consistency guarantees the server must provide
+Send the slot as `colorIndex` in `init` and each presence entry. Clients use it to select colors from the Creator theme's `--sjs2-color-utility-user-{bg,fg-on,border}-color-N` tokens. All parts of the UI must use the same slot for a participant.
 
-1. **Per-room total order**: all clients observe records in the same order the server
-   appended them. Process a room's messages sequentially.
-2. **Init atomicity**: the `init` snapshot (seed + log) plus subsequent `record`
-   messages must not lose or reorder records for that client. Easiest implementation:
-   register the client and send `init` in the same synchronous step that gates
-   broadcasts (as the reference implementation does).
-3. **No echo**: never send a client its own record.
+The `color` field provides a fallback for clients that cannot resolve theme tokens. It must equal `PRESENCE_PALETTE[colorIndex]` from [server/protocol.ts](server/protocol.ts).
 
-Nothing else is required — conflict resolution is entirely client-side (last write
-wins at the level of individual survey properties).
+If `colorIndex` is missing, clients must derive it consistently from `clientId` and use the same result throughout the UI. The reference uses the plugin's `presenceColorSlot` calculation: FNV-1a over the ID, modulo 10. This fallback can produce slots `0` and `5`.
 
-## Static serving (optional, not part of the protocol)
+## Disconnect and Room Cleanup
 
-The reference server also serves the demo UI: the lobby at `/` and the built clients at
-`/react/`, `/vue/`, `/js/`, `/angular/`. A production server may host the UI elsewhere;
-only `/api/*` and `/ws/*` are the protocol surface.
+The reference server pings each WebSocket every 30 seconds and terminates connections that do not respond. These connections produce the same `presence-leave` notification as a normal close. Browsers answer pings at the WebSocket layer, so clients do not need a separate timer to detect inactive peers.
+
+When the last participant leaves, start a timer controlled by `EMPTY_ROOM_TTL_MS` (default: 30 minutes). A participant reconnecting before it expires cancels the timer. Otherwise, delete the room and its state.
+
+A later connection to a deleted room creates a new room with an empty survey. The reference implementation stores rooms in memory, so restarting the server also clears them.

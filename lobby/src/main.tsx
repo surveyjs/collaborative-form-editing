@@ -5,12 +5,11 @@ import "survey-core/survey-core.css";
 
 const ROOM_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-/** The lobby form is itself a SurveyJS survey, rendered with survey-react-ui. */
 const lobby = new Model({
-    title: "Collaborative Survey Creator",
-    description: "Pick a framework, join a room — or leave the room id empty to start a fresh one.",
+    title: "Collaborative Form Editing",
+    description: "Pick a framework and join a room — anyone using the same room identifier will edit the form together in real time.",
     showQuestionNumbers: "off",
-    completeText: "Create & join",
+    completeText: "Join",
     widthMode: "static",
     width: "680px",
     textUpdateMode: "onTyping",
@@ -36,7 +35,7 @@ const lobby = new Model({
             type: "text",
             name: "name",
             title: "Your name",
-            description: "Shown to other participants next to your cursor and selection.",
+            description: "If left empty, your saved name or a generated guest name will be used.",
             placeholder: "e.g. Maria",
             maxLength: 32
         },
@@ -44,8 +43,8 @@ const lobby = new Model({
             type: "text",
             name: "roomId",
             title: "Room ID",
-            description: "A random room with an empty survey will be created.",
-            placeholder: "e.g. my-team",
+            description: "If empty, a new room will be created.",
+            placeholder: "Example: team-42",
             maxLength: 64,
             validators: [{
                 type: "regex",
@@ -56,8 +55,9 @@ const lobby = new Model({
         {
             type: "comment",
             name: "seed",
-            title: "Initial survey JSON",
-            description: "The room doesn't exist yet — it will be created with this initial state.",
+            title: "Survey JSON schema",
+            description: "The room will be created with this schema. If omitted, an empty survey is used.",
+            placeholder: "Paste a valid SurveyJS JSON schema.",
             rows: 10,
             visible: false
         }
@@ -77,9 +77,9 @@ function updateForRoomState(): void {
     const id = ((lobby.getValue("roomId") as string) ?? "").trim();
     if (id === "") {
         roomExists = null;
-        roomQ.description = "A random room with an empty survey will be created.";
+        roomQ.description = "If empty, a new room will be created.";
         seedQ.visible = false;
-        lobby.completeText = "Create & join";
+        lobby.completeText = "Join";
         return;
     }
     if (!ROOM_ID_RE.test(id)) {
@@ -101,9 +101,9 @@ function updateForRoomState(): void {
                 lobby.completeText = "Join";
             } else {
                 roomExists = false;
-                roomQ.description = "Room doesn't exist — it will be created with the initial state below.";
+                roomQ.description = "Room doesn't exist yet — it will be created with the schema below.";
                 seedQ.visible = true;
-                lobby.completeText = "Create & join";
+                lobby.completeText = "Join";
             }
         })
         .catch(() => {

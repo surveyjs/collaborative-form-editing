@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Browser e2e tests for the collaborative Survey Creator (v2, journal-based).
+ * Browser e2e tests for Collaborative Form Editing (v2, journal-based).
  *
  * The server serves the lobby plus the four PRE-BUILT client bundles, so run
  * `npm run build:clients` (or `npm start`, which builds and serves) before the
