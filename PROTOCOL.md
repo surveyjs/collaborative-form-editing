@@ -4,7 +4,7 @@ This document describes the server protocol used by the SurveyJS Creator collabo
 
 ## Room State
 
-Each room holds its initial survey JSON (`seed`), an ordered list of edit records (`log`), and its connected clients. The server stores and forwards the survey JSON and records without interpreting their contents.
+Each room holds its initial survey JSON (`seed`), an ordered list of edit records (`log`), and its connected clients. Each log entry keeps its record together with the record's author. The server stores and forwards the survey JSON and records without interpreting their contents.
 
 The collaboration plugin turns local edits into records and applies records received from other participants. Applying the same initial survey and record sequence produces the same result, with the last change winning for each survey property.
 
@@ -43,15 +43,17 @@ The server sends `init` immediately after connecting:
 ```json
 {
   "type": "init",
-  "clientId": "client-1",
-  "colorIndex": 1,
-  "color": "#1570EF",
+  "clientId": "client-2",
   "seed": {},
-  "log": []
+  "log": [
+    { "from": "client-1", "name": "Maria", "payload": { "...": "opaque record" } }
+  ]
 }
 ```
 
-The client loads `seed` into the Creator, then applies every record in `log` in array order. The example shows a room with no edits yet. The color fields belong to the optional presence extension and may be omitted by servers that do not support it.
+The client loads `seed` into the Creator, then applies the `payload` of every entry in `log` in array order. The example shows a room with one edit, made by another participant. Each entry has the same `from`, `name`, and `payload` fields as a [`record` message](#edit-records), so a client can show who made every edit in the log, including participants who have already left. The color fields belong to the optional presence extension and may be omitted by servers that do not support it.
+
+> **Changed:** earlier versions of the protocol sent `log` as an array of bare records, without authors. A client written for that format applies each entry as a record and must be updated.
 
 The server must send `init` before any `record` messages. Register the client and send the snapshot as one operation, so no edit is lost or delivered out of order between the snapshot and subsequent updates.
 
@@ -63,13 +65,15 @@ When a local record is added or updated, the client sends an `append` message. T
 { "type": "append", "payload": { "...": "opaque record" } }
 ```
 
-The server appends the payload to the room's log and forwards it to every other participant:
+The server adds the author's identity to the payload, appends the result to the room's log, and forwards it to every other participant:
 
 ```json
-{ "type": "record", "from": "client-1", "payload": { "...": "opaque record" } }
+{ "type": "record", "from": "client-1", "name": "Maria", "payload": { "...": "opaque record" } }
 ```
 
-Process each room's messages sequentially and broadcast records in log order. Never echo a record to its sender. The `from` field identifies the author, allowing clients to reject accidental echoes.
+Process each room's messages sequentially and broadcast records in log order. Never echo a record to its sender. As with presence, identity comes from the connection, not from the payload: `from` is the author's client ID, and `name` is the display name the author connected with. Clients use `from` to reject accidental echoes, and both fields to show who made the edit.
+
+Keep the author with the log entry for as long as the room exists. A participant who joins later learns about earlier authors only from the log, because the participant list contains only connected clients. Client IDs are assigned per connection, so the same person reconnecting becomes a new author with the same name.
 
 Append every record, including updated versions of earlier records. The plugin can combine rapid typing into one record and send it again when it changes. Do not deduplicate records or use a payload field as a unique log key: fields such as `seq` are local to each client. Applying the complete log in order handles these updates.
 
@@ -87,6 +91,8 @@ Clients send their full presence state each time, rather than partial changes:
 
 The plugin defines and interprets `state`. The server keeps only the latest state for each connected client and never adds presence to the edit log.
 
+Editing locks also travel in `state`, so the server needs no lock messages. A participant who selects a question or panel in the designer sends `"lock": true` next to `sel`, and every other client then treats that element and its content as read-only. On the Logic tab, a participant who opens an existing rule sends the rule's key as `rule` together with `"lock": true`, and every other client then treats that rule, and the properties it sets, as read-only. Clients resolve locks themselves, from the same roster: when two participants lock overlapping elements at the same moment, the one with the smaller `clientId` keeps the lock. For this, the plugin needs its own `clientId` from `init`. Locks are advisory: the server still accepts every record.
+
 To relay presence, the server adds the participant's identity and sends the result to every other client. Identity comes from the connection, not from the submitted state:
 
 ```json
@@ -95,8 +101,6 @@ To relay presence, the server adds the participant's identity and sends the resu
   "peer": {
     "clientId": "client-1",
     "name": "Maria",
-    "colorIndex": 1,
-    "color": "#1570EF",
     "state": { "tab": "designer" }
   }
 }
@@ -112,7 +116,7 @@ If any connected clients have sent presence, send their latest states to a new p
 {
   "type": "presence-sync",
   "peers": [
-    { "clientId": "client-2", "name": "Bob", "colorIndex": 2, "color": "#CA4FFB", "state": {} }
+    { "clientId": "client-2", "name": "Bob", "state": {} }
   ]
 }
 ```
@@ -127,13 +131,9 @@ Send this notification even if the participant never sent presence. Receivers ig
 
 ### Participant Colors
 
-The server assigns the first available slot from `1, 2, 3, 4, 6, 7, 8, 9`. Slots become available when participants leave and repeat after all eight are in use. Slot `0` is reserved for unknown peers; slot `5` is excluded because its background is unsuitable for the white text on name badges and cursors.
+The server does not assign colors and sends none. Each client derives a participant's color from their `clientId` with the plugin's `presenceColorSlot`: FNV-1a over the ID, mapped onto the slots `1, 2, 3, 4, 6, 7, 8, 9` of the Creator theme's `--sjs2-color-utility-user-{bg,fg-on,border}-color-N` tokens. Slot `0` is reserved for unknown peers; slot `5` is excluded because its background is unsuitable for the white text on name badges and cursors.
 
-Send the slot as `colorIndex` in `init` and each presence entry. Clients use it to select colors from the Creator theme's `--sjs2-color-utility-user-{bg,fg-on,border}-color-N` tokens. All parts of the UI must use the same slot for a participant.
-
-The `color` field provides a fallback for clients that cannot resolve theme tokens. It must equal `PRESENCE_PALETTE[colorIndex]` from [server/protocol.ts](server/protocol.ts).
-
-If `colorIndex` is missing, clients must derive it consistently from `clientId` and use the same result throughout the UI. The reference uses the plugin's `presenceColorSlot` calculation: FNV-1a over the ID, modulo 10. This fallback can produce slots `0` and `5`.
+Every client computes the same slot for the same `clientId`, so all clients and all parts of the UI paint a participant alike. Two participants can share a color, and a reconnect gets a new `clientId` and possibly a new color.
 
 ## Disconnect and Room Cleanup
 
