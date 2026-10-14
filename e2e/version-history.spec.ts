@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { addFirstQuestion, createRoom, openRoom, questionLocator, uniqueRoomId } from "./utils";
 
 /**
@@ -73,5 +73,63 @@ test.describe("version history — react", () => {
         // Escape still closes the floating panel.
         await page.keyboard.press("Escape");
         await expect(panel(page)).toBeHidden();
+    });
+
+    test("rows say who did what, once, and do not look clickable", async ({ page, context }) => {
+        const roomId = uniqueRoomId("history-authors");
+        await createRoom(page, roomId);
+        const alice = page;
+        const bob = await context.newPage();
+        await openRoom(alice, "react", roomId, "Alice");
+        await openRoom(bob, "react", roomId, "Bob");
+
+        await addFirstQuestion(alice);
+        await expect(questionLocator(bob, "question1")).toBeVisible();
+
+        // The toolbox add reaches Bob more than once (the record is refreshed and
+        // re-sent once the element settles); the timeline lists it once, signed.
+        await openHistory(bob);
+        const added = bob.locator(".svc-version-history__row--change", { hasText: "Question \"question1\" added" });
+        await expect(added).toHaveCount(1);
+        await expect(added.locator(".svc-collab-row__subtitle")).toContainText("Alice");
+
+        // Inert rows keep the arrow; only the group header shows the hand.
+        const cursorOf = (locator: Locator): Promise<string> => locator.evaluate((el) => getComputedStyle(el).cursor);
+        expect(await cursorOf(added.locator("xpath=ancestor::*[contains(@class,'sv-list__item-body')][1]"))).toBe("default");
+        expect(await cursorOf(bob.locator(".svc-version-history__row--group").first())).toBe("pointer");
+
+        // A wider panel, and titles wrap instead of ending in an ellipsis.
+        const box = (await panel(bob).boundingBox())!;
+        expect(box.width).toBeGreaterThanOrEqual(480);
+        expect(box.width).toBeLessThan(490);
+        expect(await added.locator(".svc-collab-row__title").evaluate((el) => getComputedStyle(el).whiteSpace)).toBe("normal");
+
+        // The author's own view says "You".
+        await openHistory(alice);
+        await expect(alice.locator(".svc-version-history__row--change", { hasText: "Question \"question1\" added" })
+            .locator(".svc-collab-row__subtitle")).toContainText("You");
+    });
+
+    test("a late joiner sees who made the edits, even after the author left", async ({ page, context }) => {
+        const roomId = uniqueRoomId("history-late-author");
+        await createRoom(page, roomId);
+        const alice = page;
+        await openRoom(alice, "react", roomId, "Alice");
+        await addFirstQuestion(alice);
+        await expect(questionLocator(alice, "question1")).toBeVisible();
+        // The edit is in the room log before its author goes.
+        await expect.poll(async () => (await (await alice.request.get(`/api/rooms/${roomId}`)).json()).logLength)
+            .toBeGreaterThan(0);
+        await alice.close();
+
+        // Bob never met Alice: her name reaches him with the log alone.
+        const bob = await context.newPage();
+        await openRoom(bob, "react", roomId, "Bob");
+        await expect(questionLocator(bob, "question1")).toBeVisible();
+        await openHistory(bob);
+        const added = bob.locator(".svc-version-history__row--change", { hasText: "Question \"question1\" added" });
+        // The log holds the add and its re-sends; the timeline lists it once.
+        await expect(added).toHaveCount(1);
+        await expect(added.locator(".svc-collab-row__subtitle")).toContainText("Alice");
     });
 });

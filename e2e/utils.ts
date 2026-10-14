@@ -18,8 +18,11 @@ export async function createRoom(page: Page, roomId: string, seed?: unknown): Pr
  * on-screen connection bar. Receiving init also proves the socket is OPEN,
  * which matters because the collab client drops outbound edits made before the
  * bootstrap completes (see shared/collab-client.ts `ready` gate).
+ *
+ * `name` sets the participant's display name (two tabs of one context share
+ * localStorage, so it is how they get different names).
  */
-export async function openRoom(page: Page, client: ClientName, roomId: string): Promise<void> {
+export async function openRoom(page: Page, client: ClientName, roomId: string, name?: string): Promise<void> {
     // Register the frame listener BEFORE navigating so we never miss the init
     // frame, which the server sends immediately on connect.
     const initReceived = new Promise<void>((resolve) => {
@@ -32,7 +35,9 @@ export async function openRoom(page: Page, client: ClientName, roomId: string): 
             });
         });
     });
-    await page.goto(`/${client}/?room=${encodeURIComponent(roomId)}`);
+    // `name` becomes the display name: the client reads ?name= ahead of localStorage.
+    const nameParam = name !== undefined ? `&name=${encodeURIComponent(name)}` : "";
+    await page.goto(`/${client}/?room=${encodeURIComponent(roomId)}${nameParam}`);
     await initReceived;
     await expect(toolboxItem(page, "Single-Line Input")).toBeVisible();
 }
@@ -52,6 +57,24 @@ export function toolboxItem(page: Page, name: string): Locator {
  */
 export async function addFirstQuestion(page: Page): Promise<void> {
     await toolboxItem(page, "Single-Line Input").click();
+}
+
+/**
+ * Select the survey itself (the designer's "Survey settings" surface tool),
+ * releasing the editing lock the page held on its selected question or panel.
+ * Retried: right after a toolbox add the creator focuses the new question's
+ * title with a delay, and focus returning from a closed adorner menu does the
+ * same - either re-selects the question.
+ */
+export async function releaseSelection(page: Page): Promise<void> {
+    const selected = page.locator(".svc-question__content--selected");
+    await expect(async () => {
+        if (await selected.count() > 0) await page.locator(".sv-action--svd-settings").first().click();
+        // Must hold: a menu that just closed returns the focus into the
+        // question's adorner a moment later, which selects it again.
+        await page.waitForTimeout(500);
+        await expect(selected).toHaveCount(0, { timeout: 100 });
+    }).toPass({ timeout: 10_000 });
 }
 
 /** Locator for a question on the design surface, by its survey-element name. */

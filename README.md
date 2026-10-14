@@ -31,7 +31,7 @@ As participants edit the form, everyone can see their modifications, which quest
 
 Each client uses `CollaborationPlugin` from `survey-creator-core/collaboration` to turn local edits into JSON records. The shared [connection helper](shared/collab-client.ts) sends these records to the server and applies records received from other participants.
 
-The server keeps the initial survey JSON and an ordered log of edits for each room. It appends incoming records and forwards them to the other clients. When someone joins later, their client loads the initial survey and replays the log to reach the current state. The plugin resolves conflicts using the last change.
+The server keeps the initial survey JSON and an ordered log of edits, each with its author, for each room. It appends incoming records and forwards them to the other clients. When someone joins later, their client loads the initial survey and replays the log to reach the current state. The plugin resolves conflicts using the last change.
 
 The plugin also captures each participant's active tab, selection, property focus, and cursor. The connection helper relays this presence information so that the plugin can show where others are working.
 

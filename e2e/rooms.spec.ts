@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { ProtoClient } from "./proto-client";
 import {
     addFirstQuestion,
     createRoom,
@@ -62,5 +63,28 @@ test.describe("rooms", () => {
         const info = await res.json();
         expect(info.exists).toBe(true);
         expect(info.clientCount).toBe(1);
+    });
+
+    test("the log keeps each record's author after the author leaves", async () => {
+        const roomId = uniqueRoomId("log-author");
+        const a = await ProtoClient.connect(roomId, "Alice");
+        const initA = await a.next((m) => m.type === "init");
+        const b = await ProtoClient.connect(roomId, "Bob");
+        await b.next((m) => m.type === "init");
+
+        // The relay signs the record with the connection's identity.
+        a.send({ type: "append", payload: { hello: 1 } });
+        const rec = await b.next((m) => m.type === "record");
+        expect(rec).toEqual({ type: "record", from: initA.clientId, name: "Alice", payload: { hello: 1 } });
+
+        // Alice is gone from the room, not from its log.
+        a.close();
+        await b.next((m) => m.type === "presence-leave" && m.clientId === initA.clientId);
+        const c = await ProtoClient.connect(roomId, "Carol");
+        const initC = await c.next((m) => m.type === "init");
+        expect(initC.log).toEqual([{ from: initA.clientId, name: "Alice", payload: { hello: 1 } }]);
+
+        b.close();
+        c.close();
     });
 });

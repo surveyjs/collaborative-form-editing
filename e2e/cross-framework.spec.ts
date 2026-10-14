@@ -7,6 +7,7 @@ import {
     openRoom,
     questionLocator,
     questionTypeButton,
+    releaseSelection,
     uniqueRoomId
 } from "./utils";
 
@@ -30,8 +31,12 @@ test.describe("cross-framework room", () => {
             await expect(questionLocator(tab, "question1")).toBeVisible();
         }
 
-        // The js tab (last) converts it — every framework converges.
+        // The react tab still has question1 selected - an editing lock that
+        // makes it read-only elsewhere - so it lets go before the js tab
+        // (last) converts it; converting selects it on the js tab in turn.
+        await releaseSelection(tabs[0]);
         await changeQuestionType(tabs[3], "question1", "Checkboxes");
+        await releaseSelection(tabs[3]);
         for (const tab of tabs) {
             await expect(questionTypeButton(tab, "question1")).toHaveAccessibleName("Checkboxes");
         }

@@ -9,6 +9,7 @@ import {
     questionInputTypeButton,
     questionLocator,
     questionTypeButton,
+    releaseSelection,
     uniqueRoomId
 } from "./utils";
 
@@ -36,11 +37,17 @@ for (const client of CLIENTS) {
             // A changes the input subtype → replicated to B.
             await changeInputType(tabA, "question1", "Email");
             await expect(questionInputTypeButton(tabA, "question1")).toHaveAccessibleName("Email");
+            // A still has question1 selected - an editing lock: B gets the
+            // question read-only (no type buttons) until A selects elsewhere.
+            await expect(questionInputTypeButton(tabB, "question1")).toHaveCount(0);
+            await releaseSelection(tabA);
             await expect(questionInputTypeButton(tabB, "question1")).toHaveAccessibleName("Email");
 
             // B converts the question type → replicated back to A (reverse direction).
             await changeQuestionType(tabB, "question1", "Long Text");
             await expect(questionTypeButton(tabB, "question1")).toHaveAccessibleName("Long Text");
+            // Converting selected the question on B - B holds it now.
+            await releaseSelection(tabB);
             await expect(questionTypeButton(tabA, "question1")).toHaveAccessibleName("Long Text");
         });
     });

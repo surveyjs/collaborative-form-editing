@@ -14,9 +14,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, WebSocket } from "ws";
-import { PRESENCE_MAX_BYTES, PRESENCE_NAME_MAX, PRESENCE_PALETTE, ROOM_ID_RE, truncateCodePoints } from "./protocol.js";
+import { PRESENCE_MAX_BYTES, PRESENCE_NAME_MAX, ROOM_ID_RE, truncateCodePoints } from "./protocol.js";
 import type { ClientToServer, ICreateRoomRequest, ServerToClient } from "./protocol.js";
-import { addClient, appendRecord, assignColorSlot, createRoom, getOrCreateRoom, getRoom, removeClient, setPresence } from "./room-store.js";
+import { addClient, appendRecord, createRoom, getOrCreateRoom, getRoom, removeClient, setPresence } from "./room-store.js";
 import type { Room } from "./room-store.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
@@ -244,13 +244,6 @@ function send(ws: WebSocket, msg: ServerToClient): void {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
 }
 
-// The slot is the color identity clients paint with; the hex is its mirror.
-// Slot 0 (gray) is the fallback for an id with no slot, and is never assigned.
-const slotOf = (room: Room, id: string): number => room.colorSlots.get(id) ?? 0;
-
-const colorOf = (room: Room, id: string): string =>
-    PRESENCE_PALETTE[slotOf(room, id)] ?? PRESENCE_PALETTE[0];
-
 const nameOf = (room: Room, id: string): string => room.names.get(id) ?? "Guest";
 
 // Presence rate limit: token bucket per connection.
@@ -260,7 +253,6 @@ const PRESENCE_TOKENS_PER_SEC = 50;
 function onConnection(ws: WebSocket, room: Room, name: string): void {
     const clientId = randomUUID();
     addClient(room, clientId, ws);
-    assignColorSlot(room, clientId);
     room.names.set(clientId, name);
     console.log(`[room ${room.id}] + client ${clientId} "${name}" (now ${room.clients.size})`);
 
@@ -270,10 +262,10 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
     ka.isAlive = true;
     ws.on("pong", () => { ka.isAlive = true; });
 
-    // Bootstrap: current seed + full log. Must precede any relayed record.
+    // Bootstrap: current seed + full log, each entry signed by its author.
+    // Must precede any relayed record.
     send(ws, {
         type: "init", clientId,
-        colorIndex: slotOf(room, clientId), color: colorOf(room, clientId),
         seed: room.seed, log: room.log
     });
     // Roster of everyone who already announced presence. Same socket right
@@ -282,8 +274,7 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
         send(ws, {
             type: "presence-sync",
             peers: [...room.presence].map(([id, state]) => ({
-                clientId: id, name: nameOf(room, id),
-                colorIndex: slotOf(room, id), color: colorOf(room, id), state
+                clientId: id, name: nameOf(room, id), state
             }))
         });
     }
@@ -300,9 +291,12 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
         }
         if (!msg || typeof msg !== "object") return;
         if (msg.type === "append" && msg.payload != null) {
-            appendRecord(room, msg.payload);
+            // The author is stamped from the connection and kept with the
+            // record: the name has to outlive the connection it came from.
+            const entry = { from: clientId, name: nameOf(room, clientId), payload: msg.payload };
+            appendRecord(room, entry);
             for (const [otherId, peer] of room.clients) {
-                if (otherId !== clientId) send(peer, { type: "record", from: clientId, payload: msg.payload });
+                if (otherId !== clientId) send(peer, { type: "record", ...entry });
             }
         } else if (msg.type === "presence" && msg.state != null) {
             // Guards: frame size cap + token bucket; excess is dropped silently.
@@ -317,10 +311,7 @@ function onConnection(ws: WebSocket, room: Room, name: string): void {
             tokens -= 1;
             // Latest state only, never in the log.
             setPresence(room, clientId, msg.state);
-            const peerEntry = {
-                clientId, name: nameOf(room, clientId),
-                colorIndex: slotOf(room, clientId), color: colorOf(room, clientId), state: msg.state
-            };
+            const peerEntry = { clientId, name: nameOf(room, clientId), state: msg.state };
             for (const [otherId, peer] of room.clients) {
                 if (otherId !== clientId) send(peer, { type: "presence", peer: peerEntry });
             }

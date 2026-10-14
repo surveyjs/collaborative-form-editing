@@ -1,7 +1,12 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import WebSocket from "ws";
+import { ProtoClient } from "./proto-client";
 import { createRoom, questionLocator, uniqueRoomId } from "./utils";
-import { PRESENCE_COLOR_SLOTS, PRESENCE_PALETTE } from "../server/protocol";
+
+// The theme user-color slots a peer may be painted with - a mirror of
+// creator-core's PRESENCE_COLOR_SLOTS (0 is the "unknown" gray, 5 is the
+// yellow white badge text is illegible on). Clients derive the slot from the
+// clientId; the server assigns no colors.
+const LEGIBLE_SLOTS = [1, 2, 3, 4, 6, 7, 8, 9];
 
 /**
  * Does the node's computed box-shadow use its own --collab-peer-color?
@@ -9,8 +14,8 @@ import { PRESENCE_COLOR_SLOTS, PRESENCE_PALETTE } from "../server/protocol";
  * no decoration or the native (local-priority) ring.
  *
  * The overlay stamps that variable INLINE on the node, carrying the literal
- * color collab-client.ts resolved from the peer's slot. The probe element only
- * normalizes it into the rgb() form box-shadow is reported in.
+ * theme color of the slot it derived from the peer's clientId. The probe
+ * element only normalizes it into the rgb() form box-shadow is reported in.
  */
 async function ringShowsPeerColor(node: Locator): Promise<boolean> {
     return node.evaluate((el) => {
@@ -35,8 +40,8 @@ async function ringShowsPeerColor(node: Locator): Promise<boolean> {
  *  - ring:   the inline --collab-peer-color the overlay stamps on the real node
  *  - badge:  the layer badge's background. It lives outside .sd-theme-root, so
  *            this also proves the value is a literal and not a var() reference
- *  - arrow / pill: the cursor's svg fill and its name pill, both BAKED into
- *            per-client artifacts at first sighting and never refreshed
+ *  - arrow / pill: the cursor's svg fill and its name pill, per-client
+ *            artifacts repainted whenever the theme resolves the slot anew
  *
  * Probes are appended to <body>, not to the measured node: the values are
  * already literals, and the creator subtree is watched by the overlay's
@@ -81,78 +86,15 @@ async function peerColors(page: Page, name: string, ringSelector: string): Promi
     }, { name, ringSelector });
 }
 
-const WS_BASE = "ws://localhost:8080";
-
-/**
- * Minimal protocol-level WS client (runs in Node, not the browser): buffers
- * every server message and lets tests await one matching a predicate.
- */
-class ProtoClient {
-    private readonly messages: any[] = [];
-    private waiters: Array<{ pred: (m: any) => boolean; resolve: (m: any) => void }> = [];
-    private constructor(private readonly ws: WebSocket) {}
-
-    static async connect(roomId: string, name?: string): Promise<ProtoClient> {
-        const query = name !== undefined ? `?name=${encodeURIComponent(name)}` : "";
-        const ws = new WebSocket(`${WS_BASE}/ws/rooms/${encodeURIComponent(roomId)}${query}`);
-        const client = new ProtoClient(ws);
-        ws.on("message", (data) => {
-            const msg = JSON.parse(data.toString());
-            const waiter = client.waiters.find((w) => w.pred(msg));
-            if (waiter) {
-                client.waiters = client.waiters.filter((w) => w !== waiter);
-                waiter.resolve(msg);
-            } else {
-                client.messages.push(msg);
-            }
-        });
-        await new Promise<void>((resolve, reject) => {
-            ws.once("open", resolve);
-            ws.once("error", reject);
-        });
-        return client;
-    }
-
-    send(obj: unknown): void {
-        this.ws.send(JSON.stringify(obj));
-    }
-
-    /** Next (or already buffered) message matching `pred`. */
-    next(pred: (m: any) => boolean, timeoutMs = 10_000): Promise<any> {
-        const idx = this.messages.findIndex(pred);
-        if (idx >= 0) return Promise.resolve(this.messages.splice(idx, 1)[0]);
-        return new Promise((resolve, reject) => {
-            const waiter = { pred, resolve: (m: any) => { clearTimeout(timer); resolve(m); } };
-            const timer = setTimeout(() => {
-                this.waiters = this.waiters.filter((w) => w !== waiter);
-                reject(new Error(`timed out waiting for message (${timeoutMs}ms)`));
-            }, timeoutMs);
-            this.waiters.push(waiter);
-        });
-    }
-
-    /** Assert no buffered/arriving message matches `pred` within `windowMs`. */
-    async expectNone(pred: (m: any) => boolean, windowMs = 750): Promise<void> {
-        await expect(this.next(pred, windowMs)).rejects.toThrow(/timed out/);
-    }
-
-    close(): void {
-        this.ws.close();
-    }
-}
-
 test.describe("presence protocol", () => {
-    test("init carries a color slot; roster sync reaches the newcomer; relay has no echo", async () => {
+    test("envelopes carry no color; roster sync reaches the newcomer; relay has no echo", async () => {
         const roomId = uniqueRoomId("pres-sync");
         const a = await ProtoClient.connect(roomId, "A");
         const initA = await a.next((m) => m.type === "init");
-        // The slot is the color identity clients paint with; the hex only mirrors it.
-        // Membership in the set is the real contract: it also asserts the two
-        // exclusions (0 = reserved gray, 5 = illegible against white badge text).
-        expect(PRESENCE_COLOR_SLOTS).toContain(initA.colorIndex);
-        expect(PRESENCE_COLOR_SLOTS).not.toContain(0);
-        expect(PRESENCE_COLOR_SLOTS).not.toContain(5);
-        expect(initA.color).toBe(PRESENCE_PALETTE[initA.colorIndex]);
+        // Colors are the clients' business (derived from the clientId): the
+        // server stamps none on any envelope.
+        expect(initA).not.toHaveProperty("colorIndex");
+        expect(initA).not.toHaveProperty("color");
 
         a.send({ type: "presence", state: { tab: "designer" } });
         // No echo: A never receives its own presence back.
@@ -160,16 +102,14 @@ test.describe("presence protocol", () => {
 
         const b = await ProtoClient.connect(roomId, "B");
         const initB = await b.next((m) => m.type === "init");
-        expect(initB.colorIndex).not.toBe(initA.colorIndex);
-        expect(initB.color).not.toBe(initA.color);
 
         // The server stamps the name (from the ?name= connect param) onto the
         // envelope; the state itself carries no identity.
         const sync = await b.next((m) => m.type === "presence-sync");
         expect(sync.peers).toHaveLength(1);
         expect(sync.peers[0].clientId).toBe(initA.clientId);
-        expect(sync.peers[0].colorIndex).toBe(initA.colorIndex);
-        expect(sync.peers[0].color).toBe(initA.color);
+        expect(sync.peers[0]).not.toHaveProperty("colorIndex");
+        expect(sync.peers[0]).not.toHaveProperty("color");
         expect(sync.peers[0].name).toBe("A");
         expect(sync.peers[0].state.name).toBeUndefined();
 
@@ -178,7 +118,8 @@ test.describe("presence protocol", () => {
         const update = await a.next((m) => m.type === "presence");
         expect(update.peer.clientId).toBe(initB.clientId);
         expect(update.peer.name).toBe("B");
-        expect(update.peer.colorIndex).toBe(initB.colorIndex);
+        expect(update.peer).not.toHaveProperty("colorIndex");
+        expect(update.peer).not.toHaveProperty("color");
         expect(update.peer.state.tab).toBe("theme");
 
         a.close();
@@ -208,7 +149,7 @@ test.describe("presence protocol", () => {
         b.close();
     });
 
-    test("leave broadcast on disconnect; roster forgets the leaver; color slot is reused", async () => {
+    test("leave broadcast on disconnect; roster forgets the leaver", async () => {
         const roomId = uniqueRoomId("pres-leave");
         const a = await ProtoClient.connect(roomId, "A");
         const initA = await a.next((m) => m.type === "init");
@@ -224,11 +165,9 @@ test.describe("presence protocol", () => {
         const leave = await b.next((m) => m.type === "presence-leave");
         expect(leave.clientId).toBe(initA.clientId);
 
-        // C takes A's freed color slot and gets a roster without A.
+        // A newcomer gets a roster without A.
         const c = await ProtoClient.connect(roomId);
-        const initC = await c.next((m) => m.type === "init");
-        expect(initC.colorIndex).toBe(initA.colorIndex);
-        expect(initC.color).toBe(initA.color);
+        await c.next((m) => m.type === "init");
         await c.expectNone((m) => m.type === "presence-sync" && m.peers.some((p: any) => p.clientId === initA.clientId));
 
         b.close();
@@ -266,24 +205,6 @@ test.describe("presence protocol", () => {
         a.close();
         b.close();
     });
-    test("a room past palette capacity keeps every slot inside the legible set", async () => {
-        // The wrap branch must repeat a color rather than hand out a slot the
-        // clients cannot paint: 0 renders gray, 5 puts white badge text on
-        // yellow, and anything above 9 has no theme token at all.
-        const roomId = uniqueRoomId("pres-capacity");
-        const clients: ProtoClient[] = [];
-        try {
-            for (let i = 0; i < PRESENCE_COLOR_SLOTS.length + 1; i++) {
-                const client = await ProtoClient.connect(roomId, `U${i}`);
-                clients.push(client);
-                const init = await client.next((m) => m.type === "init");
-                expect(PRESENCE_COLOR_SLOTS).toContain(init.colorIndex);
-                expect(init.color).toBe(PRESENCE_PALETTE[init.colorIndex]);
-            }
-        } finally {
-            clients.forEach((client) => client.close());
-        }
-    });
 });
 
 // ---------------------------------------------------------------------------
@@ -307,27 +228,6 @@ async function openRoomAs(page: Page, roomId: string, name: string): Promise<voi
 }
 
 test.describe("presence UI", () => {
-    test("the server's fallback palette mirrors the theme's user-color tokens", async ({ page }) => {
-        // PRESENCE_PALETTE is what a client paints with when it cannot read the
-        // theme (nothing mounted yet). If the two ever drift, a peer seen early
-        // gets one color while its avatar chip - which always paints the token -
-        // gets another, which is the very split this whole design closes.
-        const roomId = uniqueRoomId("pres-palette");
-        await createRoom(page, roomId, {
-            pages: [{ name: "p1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
-        });
-        await openRoomAs(page, roomId, "Alice");
-        const themed = await page.evaluate(() => {
-            const cs = getComputedStyle(document.querySelector(".svc-creator.sd-theme-root")!);
-            const out: string[] = [];
-            for (let slot = 0; slot < 10; slot++) {
-                out.push(cs.getPropertyValue(`--sjs2-color-utility-user-bg-color-${slot}`).trim().toUpperCase());
-            }
-            return out;
-        });
-        expect(themed).toEqual(PRESENCE_PALETTE.map((hex) => hex.toUpperCase()));
-    });
-
     test("participant chips, selection outline, tab state and remote cursor", async ({ page, context }) => {
         const roomId = uniqueRoomId("pres-ui");
         await createRoom(page, roomId, {
@@ -373,16 +273,15 @@ test.describe("presence UI", () => {
         await bob.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 5 });
         await expect(alice.locator(".collab-presence-cursor-name", { hasText: "Bob" })).toBeVisible();
 
-        // ONE PEER, ONE COLOR - the assertion this whole slot plumbing exists
-        // for. The chip is painted by a CSS class from the peer's slot, while
-        // the ring, badge and cursor are painted from the literal color
-        // collab-client.ts resolved for that same slot; before the fix those
-        // two derivations were unrelated and a peer showed up in two colors.
+        // ONE PEER, ONE COLOR. The chip is painted by a CSS class from the
+        // peer's slot, while the ring, badge and cursor are painted from the
+        // literal theme color the overlay resolves for that same slot - both
+        // derived from the clientId alone, with no color on the wire.
         await expect(async () => {
             const c = await peerColors(alice, "Bob",
                 '[data-sv-drop-target-survey-element="q1"] > .svc-question__content');
-            // The slot came from the server, out of the legible set.
-            expect(PRESENCE_COLOR_SLOTS).toContain(Number(c.slot));
+            // The slot derived from the clientId is out of the legible set.
+            expect(LEGIBLE_SLOTS).toContain(Number(c.slot));
             // The chip's class really paints that slot's theme token...
             expect(c.token).toBe(c.chip);
             // ...and every other surface lands on the identical pixel. A
@@ -393,12 +292,14 @@ test.describe("presence UI", () => {
             expect(c.pill).toBe(c.chip);
         }).toPass({ timeout: 10_000 });
 
-        // Local priority: Alice selects q1 herself → her native selection ring
-        // wins, Bob's colored ring is suppressed on that node - but the badge
-        // stays: Alice still sees who else is on the element.
+        // Bob selected q1 first, so he holds it as an editing lock: when Alice
+        // selects it too she is only a viewer, and Bob's colored ring stays on
+        // top of her native selection (see element-lock.spec.ts) - with the
+        // badge telling her who has the element.
         await questionLocator(alice, "q1").click();
+        await expect(aliceRing).toHaveAttribute("data-collab-lock", "on");
         await expect(async () => {
-            expect(await ringShowsPeerColor(aliceRing)).toBe(false);
+            expect(await ringShowsPeerColor(aliceRing)).toBe(true);
         }).toPass({ timeout: 10_000 });
         await expect(aliceBadge).toBeVisible();
 
@@ -422,6 +323,36 @@ test.describe("presence UI", () => {
         await expect(alice.locator("[data-collab-focus]")).toHaveCount(0);
         await expect(alice.locator(".collab-presence-badge")).toHaveCount(0);
         await expect(alice.locator(".collab-presence-cursor")).toBeHidden();
+    });
+
+    test("participant chip initials keep the avatar's typography and color", async ({ page, context }) => {
+        const roomId = uniqueRoomId("pres-chip-type");
+        await createRoom(page, roomId, {
+            pages: [{ name: "p1", elements: [{ type: "text", name: "q1", title: "Question 1" }] }]
+        });
+        await openRoomAs(page, roomId, "Alice");
+        const bob = await context.newPage();
+        await openRoomAs(bob, roomId, "Bob");
+
+        const chip = page.locator('.svc-collab-bar__participant[title*="Bob"]');
+        await expect(chip).toBeVisible();
+        // The initials sit in the action bar's own .sd-action__title, which
+        // survey-core styles with the action's typography and title color.
+        // The avatar's must win - also while the chip is hovered.
+        const styles = (): Promise<{ chip: string, title: string, padding: string }> => chip.evaluate((el) => {
+            const pick = (e: Element): string => {
+                const cs = getComputedStyle(e);
+                return [cs.color, cs.fontSize, cs.fontWeight, cs.lineHeight].join(" ");
+            };
+            const title = el.querySelector(".sd-action__title")!;
+            return { chip: pick(el), title: pick(title), padding: getComputedStyle(title).paddingLeft };
+        });
+        let s = await styles();
+        expect(s.title).toBe(s.chip);
+        expect(s.padding).toBe("0px");
+        await chip.hover();
+        s = await styles();
+        expect(s.title).toBe(s.chip);
     });
 
     test("participant chips are not rebuilt on presence ticks that don't change the roster", async ({ page, context }) => {
@@ -485,6 +416,30 @@ test.describe("presence UI", () => {
         await alice.getByRole("button", { name: "Participants" }).click();
         await alice.locator(".svc-collab-bar__roster-item", { hasText: "Bob" }).click();
         await expect(alice.locator(".svc-toolbox").first()).toBeVisible();
+
+        await bob.close();
+    });
+
+    test("roster avatars leave room around the initials", async ({ page, context }) => {
+        const roomId = uniqueRoomId("roster-avatar");
+        await createRoom(page, roomId, { pages: [{ name: "p1", elements: [{ type: "text", name: "q1" }] }] });
+        await openRoomAs(page, roomId, "Alice");
+        const bob = await context.newPage();
+        await openRoomAs(bob, roomId, "Bob Brown");
+        await expect(page.locator('.svc-collab-bar__participant[title*="Bob"]')).toBeVisible();
+
+        await page.getByRole("button", { name: "Participants" }).click();
+        const marker = page.locator(".svc-collab-bar__roster-item", { hasText: "Bob" }).locator(".svc-collab-bar__avatar--list");
+        await expect(marker).toHaveText("BB");
+        // The inline avatar size shared with the Logic-tab holder chip and
+        // plate, and air between the initials and the circle on both sides.
+        const m = await marker.evaluate((el) => {
+            const range = document.createRange();
+            range.selectNodeContents(el);
+            return { circle: el.getBoundingClientRect().width, text: range.getBoundingClientRect().width };
+        });
+        expect(m.circle).toBe(24);
+        expect(m.circle - m.text).toBeGreaterThanOrEqual(6);
 
         await bob.close();
     });
