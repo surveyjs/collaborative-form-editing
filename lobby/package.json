@@ -15,8 +15,8 @@
     "dependencies": {
         "react": "^18.3.1",
         "react-dom": "^18.3.1",
-        "survey-core": "^3.0.1",
-        "survey-react-ui": "^3.0.1"
+        "survey-core": "^3.2.5",
+        "survey-react-ui": "^3.2.5"
     },
     "devDependencies": {
         "@types/react": "^18.3.3",

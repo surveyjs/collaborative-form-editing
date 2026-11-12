@@ -37,11 +37,12 @@ The plugin also captures each participant's active tab, selection, property focu
 
 The [reference server](server/) has no SurveyJS dependency and does not interpret survey JSON or edit records. [PROTOCOL.md](PROTOCOL.md) describes how to implement a compatible server in another language.
 
+The JSON editor tab uses [Monaco Editor](https://microsoft.github.io/monaco-editor/). Each client bundles the `monaco-editor` package and its web workers and passes them to the [Monaco helper](shared/monaco-json-editor.ts). The helper sets `window.monaco` before Survey Creator is created, so the Creator picks Monaco for the JSON tab, and switches Monaco between its light and dark themes when the Creator's UI theme changes.
+
 ### Limitations
 
 - Rooms are stored in memory and lost when the server restarts.
 - Empty rooms are deleted after a configurable delay, which defaults to 30 minutes.
-- The JSON editor tab uses a plain text area because the optional `ace-builds` package is not installed.
 
 ## Use the Collaboration Plugin
 

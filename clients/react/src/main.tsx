@@ -9,6 +9,8 @@ import SurveyThemes from "survey-core/themes";
 import { SurveyCreator, SurveyCreatorComponent } from "survey-creator-react";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../shared/collab-client";
 import { registerShippingAddress } from "../../../shared/shipping-address";
+import { followCreatorColorPalette, installMonaco } from "../../../shared/monaco-json-editor";
+import { monaco, monacoWorkers } from "./monaco";
 import "survey-core/survey-core.css";
 import "survey-creator-core/survey-creator-core.css";
 import "survey-creator-core/collaboration.css";
@@ -20,6 +22,7 @@ import "survey-creator-core/i18n";
 // Baked in at build time from the environment (see envPrefix in vite.config.ts).
 if (import.meta.env.SURVEYJS_LICENSE_KEY) slk(import.meta.env.SURVEYJS_LICENSE_KEY);
 registerShippingAddress({ ComponentCollection, Serializer });
+installMonaco(monaco, monacoWorkers);
 
 // Only the light creator theme is registered out of the box; without a dark
 // variant of each theme the Light/Dark switch in the creator's theme settings
@@ -36,6 +39,7 @@ if (!roomId) {
         showTranslationTab: true,
         showJSONEditorTab: true
     });
+    followCreatorColorPalette(monaco, creator);
 
     // One plugin: the change journal, presence capture/rendering and the
     // collaboration strip above the tabs. Host-specific bits - the lobby
