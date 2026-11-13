@@ -14,10 +14,11 @@
     },
     "dependencies": {
         "vue": "^3.4.19",
-        "survey-core": "^3.0.1",
-        "survey-vue3-ui": "^3.0.1",
-        "survey-creator-core": "^3.0.1",
-        "survey-creator-vue": "^3.0.1"
+        "survey-core": "^3.2.5",
+        "survey-vue3-ui": "^3.2.5",
+        "survey-creator-core": "^3.2.5",
+        "survey-creator-vue": "^3.2.5",
+        "monaco-editor": "^0.57.0"
     },
     "devDependencies": {
         "@vitejs/plugin-vue": "^5.0.4",

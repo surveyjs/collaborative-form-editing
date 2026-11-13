@@ -12,12 +12,15 @@ import SurveyThemes from "survey-core/themes";
 import { SurveyCreatorModule } from "survey-creator-angular";
 import { connectCollab, getDisplayName, getRoomIdFromUrl } from "../../../../shared/collab-client";
 import { registerShippingAddress } from "../../../../shared/shipping-address";
+import { followCreatorColorPalette, installMonaco } from "../../../../shared/monaco-json-editor";
+import { monaco, monacoWorkers } from "./monaco";
 import type { ICollabConnection } from "../../../../shared/collab-client";
 import { SURVEYJS_LICENSE_KEY } from "../license-key";
 
 // Baked in at build time from the environment (see scripts/gen-license-key.mjs).
 if (SURVEYJS_LICENSE_KEY) slk(SURVEYJS_LICENSE_KEY);
 registerShippingAddress({ ComponentCollection, Serializer });
+installMonaco(monaco, monacoWorkers);
 
 // Only the light creator theme is registered out of the box; without a dark
 // variant of each theme the Light/Dark switch in the creator's theme settings
@@ -50,6 +53,7 @@ export class AppComponent implements AfterViewInit, OnDestroy {
             showTranslationTab: true,
             showJSONEditorTab: true
         });
+        followCreatorColorPalette(monaco, this.creator);
         // One plugin: the change journal, presence capture/rendering and the
         // collaboration strip above the tabs. Host-specific bits — the lobby
         // invite link and navigation — are options.
